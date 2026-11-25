@@ -391,23 +391,29 @@ function releaseArtistNames(r) {
   const byId = new Map(artists.map(a => [Number(a.artist_id), a]));
   return releaseArtistIds(r).map(id => byId.get(Number(id))).filter(Boolean);
 }
-// Apple Music's artistName field contains the complete release credit, not just
-// artists we follow. Keep every credited name; only followed artists get profile links.
+// Split collaborative artist strings while avoiding accidental splitting of a
+// solo artist whose official name contains punctuation (e.g. "Earth, Wind & Fire").
+// If any segment matches an artist the user follows, the separators are treated
+// as collaboration delimiters so each followed collaborator can link to a profile.
+function splitArtistCredits(raw, followedByName, explicit = false) {
+  const value = String(raw || '').trim();
+  if (!value) return [];
+  const parts = value.split(/\s*(?:,|&|\band\b)\s*/i).map(x => x.trim()).filter(Boolean);
+  if (explicit || parts.some(name => followedByName.has(Classify.norm(name)))) return parts;
+  return [value];
+}
 function creditedArtistNames(r) {
-  const raw = String(r.credited_artist || '').trim();
-  const names = raw ? raw.split(/\s*,\s*/).map(x => x.trim()).filter(Boolean) : [];
-
-  // Apple sometimes returns only the release's primary artist in artistName,
-  // while the featured artists are present only in collectionName, e.g.
-  // "Hell Nah (feat. J. Cole & Anderson .Paak)". Include those credits too.
-  const titleGuests = splitTitle(r).guests;
-  if (titleGuests) {
-    names.push(...titleGuests.split(/\s*(?:,|&|\band\b|\bx\b)\s*/i)
-      .map(x => x.trim()).filter(Boolean));
-  }
-
-  const unique = [...new Map(names.map(name => [Classify.norm(name), name])).values()];
-  return unique.length ? unique : [r.artist_name || 'Unknown artist'];
+  const followedByName = new Map(artists.map(a => [Classify.norm(a.name), a]));
+  const primary = splitArtistCredits(r.credited_artist || r.artist_name || '', followedByName, !!splitTitle(r).guests);
+  // Apple sometimes returns only the primary artist in artistName, while guests
+  // are present in collectionName, e.g. "Hell Nah (feat. J. Cole & Anderson .Paak)".
+  const rawGuests = splitTitle(r).guests;
+  const guests = splitArtistCredits(rawGuests, followedByName, true);
+  const guestKeys = new Set(guests.map(Classify.norm));
+  const uniquePrimary = [...new Map(primary.filter(n => !guestKeys.has(Classify.norm(n)))
+    .map(name => [Classify.norm(name), name])).values()];
+  const uniqueGuests = [...new Map(guests.map(name => [Classify.norm(name), name])).values()];
+  return { primary: uniquePrimary.length ? uniquePrimary : (guests.length ? [] : [r.artist_name || 'Unknown artist']), guests: uniqueGuests };
 }
 
 // Newest day first (undated last); within the same day, favorite artists first.
@@ -453,14 +459,20 @@ function splitTitle(r) {
   return { title: m.length ? clean.replace(FEAT_RX, '').trim() || clean : clean, guests: m.length ? m[0][1].trim() : '' };
 }
 function metaLine(r) {
-  const t = typeOf(r), m = el('div', 'meta'), cr = r.credited_artist || '', bits = [];
+  const t = typeOf(r), m = el('div', 'meta'), bits = [];
   const followedByName = new Map(artists.map(a => [Classify.norm(a.name), a]));
   const credited = creditedArtistNames(r);
-  credited.forEach((name, i) => {
-    if (i) m.append(', ');
+  const appendNames = (names, separator) => names.forEach((name, i) => {
+    if (i) m.append(separator);
     const followed = followedByName.get(Classify.norm(name));
     m.append(followed ? artistLink(followed.artist_id, name) : name);
   });
+  appendNames(credited.primary, ', ');
+  if (credited.guests.length) {
+    if (credited.primary.length) m.append(' feat. ');
+    else m.append('feat. ');
+    appendNames(credited.guests, ' & ');
+  }
   m.append(' ', el('span', 'pill pill-' + t, CAT_LABEL[t] || 'Album'));
   // Featured artists parsed from the title are included in the full credit above.
   if (r.track_count > 1) bits.push(r.track_count + ' tracks');
