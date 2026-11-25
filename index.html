@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Release Tracker</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#2F4BFF">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Tracker">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#ECEFF3;--card:#F8F9FB;--ink:#12151C;--muted:#586170;--line:#CBD1DA;--accent:#2F4BFF;--on-accent:#fff;--err:#B3261E;
+  --font:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--bg:#0F1218;--card:#171B24;--ink:#E8EBF0;--muted:#98A1B0;--line:#2A3040;--accent:#8EA2FF;--on-accent:#0F1218;--err:#FF8A80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);line-height:1.45}
+.wrap{max-width:1040px;margin:0 auto;padding:2rem 1.25rem 4rem}
+header{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:1rem;margin-bottom:1.5rem}
+h1{margin:0;font-size:clamp(1.9rem,5vw,2.8rem);font-weight:800;letter-spacing:-.03em;line-height:1}
+.sub{margin:.4rem 0 0;color:var(--muted)}
+.layout{display:grid;grid-template-columns:1fr 300px;gap:2.5rem;align-items:start}
+aside{order:2;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1rem;position:sticky;top:1rem}
+h2{font-size:1rem;margin:0 0 .6rem;font-weight:600}
+.month{color:var(--muted);margin:2rem 0 .3rem}
+.month:first-child{margin-top:0}
+.btn{font:inherit;font-size:.9rem;color:var(--ink);background:transparent;border:1px solid var(--ink);padding:.4rem .8rem;border-radius:6px;cursor:pointer}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.quiet{border-color:var(--line);padding:.2rem .55rem;font-size:.8rem;color:var(--muted)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+form{display:flex;gap:.5rem;margin-bottom:.8rem}
+input[type=search],select{font:inherit;padding:.4rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+input[type=search]{flex:1;min-width:0}
+ul{list-style:none;margin:0 0 1.2rem;padding:0}
+li{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.4rem 0;border-top:1px solid var(--line);font-size:.92rem}
+li small{display:block;color:var(--muted)}
+.opt{display:flex;align-items:center;gap:.5rem;font-size:.9rem;color:var(--muted);margin-bottom:1rem}
+.row{display:grid;grid-template-columns:3rem 64px 1fr auto;gap:.9rem;align-items:center;padding:.8rem 0;border-top:1px solid var(--line)}
+.day{font-weight:800;font-size:1.9rem;letter-spacing:-.03em;text-align:right;font-variant-numeric:tabular-nums;line-height:1}
+.upcoming .day{color:var(--accent)}
+.art{width:64px;height:64px;border-radius:6px;object-fit:cover;background:var(--line)}
+.title{font-weight:600;overflow-wrap:anywhere}
+.meta{color:var(--muted);font-size:.875rem}
+.countdown{color:var(--accent);font-weight:600}
+.badge{background:var(--accent);color:var(--on-accent);font-size:.75rem;font-weight:600;padding:.1rem .5rem;border-radius:99px;margin-left:.5rem;white-space:nowrap}
+.link{color:var(--accent);font-size:.875rem;white-space:nowrap}
+.status{min-height:1.4rem;color:var(--muted);font-size:.9rem;margin:0 0 1rem}
+.status.err{color:var(--err)}
+.empty{color:var(--muted);padding:1rem 0}
+.period-controls{display:flex;flex-wrap:wrap;align-items:end;gap:.7rem;margin:0 0 1rem}
+.period-field{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;color:var(--muted)}
+.period-field[hidden]{display:none}
+.period-field select{min-width:145px}
+.filters{border:0;padding:0;margin:0 0 1.2rem;display:flex;flex-wrap:wrap;gap:.5rem}
+.filters label{display:flex;align-items:center;gap:.4rem;border:1px solid var(--line);border-radius:99px;padding:.25rem .8rem;font-size:.9rem;cursor:pointer}
+.filters label:has(input:checked){border-color:var(--accent);color:var(--accent)}
+.badge.new{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.badge.fav{background:transparent;color:#D69A00;border:1px solid #D69A00}
+.filters .n{color:var(--muted);font-size:.8rem}
+.tabs{display:flex;gap:.4rem;border-bottom:1px solid var(--line);margin:0 0 1.25rem}
+.tab{font:inherit;font-weight:600;color:var(--muted);background:transparent;border:0;border-bottom:3px solid transparent;padding:.7rem 1rem;cursor:pointer;margin-bottom:-1px}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-panel[hidden]{display:none}
+.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}
+.panel-heading h2{margin:0}
+.panel-sub{margin:.25rem 0 .8rem;color:var(--muted);font-size:.9rem}
+.artist-menu-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:1.5rem;align-items:start}
+.artist-search,.artist-library{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.1rem}
+.artist-list{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:2rem}.artist-list li{gap:.8rem;padding:.65rem 0}
+.artist-list .empty,.artist-list .artist-group{grid-column:1/-1}
+.artist-identity{display:flex;align-items:center;gap:.75rem;min-width:0}.artist-name{font-weight:600;overflow-wrap:anywhere}
+.artist-avatar{width:52px;height:52px;flex:0 0 52px;border-radius:50%;object-fit:cover;background:var(--line);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.85rem;font-weight:600;overflow:hidden}
+.artist-avatar img{width:100%;height:100%;object-fit:cover}.artist-list .btn{flex-shrink:0}
+.artist-tools{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 .8rem}
+.artist-tools input{flex:1 1 180px;min-width:0}
+.artist-tools select{flex:0 0 auto}
+.artist-group{display:block;border-top:0;padding:.9rem 0 .25rem;font-size:.75rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.artist-group:first-child{padding-top:0}
+.more-btn{width:100%;margin-top:.2rem}
+.artist-actions{display:flex;align-items:center;gap:.45rem;flex-shrink:0}
+.favorite-btn{width:2.1rem;height:2.1rem;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--muted);font-size:1.25rem;line-height:1;cursor:pointer}
+.favorite-btn[aria-pressed="true"]{color:#D69A00;border-color:#D69A00}
+.favorite-btn:hover{background:var(--bg)}
+.artist-list .artist-identity{flex:1}
+.name-link{background:none;border:0;padding:0;font:inherit;color:inherit;text-align:left;cursor:pointer;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
+.name-link:hover{color:var(--accent);text-decoration-color:var(--accent)}
+.back-btn{margin-bottom:.4rem}
+.profile-head{display:flex;gap:1.25rem;align-items:center;margin:1rem 0 1.5rem}
+.profile-photo{width:140px;height:140px;flex:0 0 140px;border-radius:50%;background:var(--line);display:flex;align-items:center;justify-content:center;font-size:3rem;font-weight:800;color:var(--muted);overflow:hidden}
+.profile-photo img{width:100%;height:100%;object-fit:cover}
+.profile-name{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+.profile-name h2{margin:0;font-size:clamp(1.6rem,4vw,2.4rem);font-weight:800;letter-spacing:-.03em;line-height:1.1;overflow-wrap:anywhere}
+.explicit{display:inline-block;margin-left:.45rem;padding:.12rem .3rem;border-radius:3px;background:var(--muted);color:var(--bg);font-size:.65rem;font-weight:800;line-height:1;vertical-align:middle}
+.chips{display:flex;flex-wrap:wrap;gap:.4rem;margin:.6rem 0 0}
+.chip{border:1px solid var(--line);border-radius:99px;padding:.1rem .7rem;font-size:.85rem;color:var(--muted)}
+.profile-section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.1rem;margin-bottom:1.25rem}
+.profile-section h3{margin:0 0 .7rem;font-size:1rem;font-weight:600}
+.profile-section p{margin:0 0 .6rem}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1rem}
+.stat b{display:block;font-size:1.4rem;font-weight:800;letter-spacing:-.02em}
+.stat span{color:var(--muted);font-size:.85rem}
+.disco-group{margin:0 0 1rem}
+.disco-group summary{cursor:pointer;font-weight:600;color:var(--muted);font-size:.9rem;margin-bottom:.6rem}
+.disco-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:1rem}
+.disco-item{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;color:var(--ink);text-decoration:none;min-width:0}
+.disco-item img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;background:var(--line)}
+a.disco-item:hover .t{color:var(--accent)}
+.disco-item .t{font-weight:600;overflow-wrap:anywhere}
+.disco-item .y{color:var(--muted)}
+.year-bars{display:flex;align-items:flex-end;gap:3px;height:70px;margin-bottom:.4rem;overflow-x:auto}
+.bar{flex:1 0 8px;max-width:28px;background:var(--accent);border-radius:3px 3px 0 0}
+details.year{border-top:1px solid var(--line);padding:.55rem 0}
+details.year summary{cursor:pointer;font-weight:600}
+.hist-row{display:flex;gap:.8rem;padding:.3rem 0;font-size:.9rem}
+.hist-row .d{color:var(--muted);flex:0 0 3.4rem;font-variant-numeric:tabular-nums}
+.hist-title{color:var(--ink);font-weight:600;overflow-wrap:anywhere;text-decoration:none}
+a.hist-title:hover{color:var(--accent)}
+@media (max-width:560px){.profile-head{flex-direction:column;align-items:flex-start}}
+/* two releases per row in the feed and Upcoming tab */
+#feed,#upcomingFeed{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:2rem}
+#feed .month,#upcomingFeed .month,#feed .empty,#upcomingFeed .empty{grid-column:1/-1}
+#feed>.btn,#upcomingFeed>.btn{grid-column:1/-1;justify-self:start}
+#feed .row,#upcomingFeed .row{grid-template-columns:3rem 64px minmax(0,1fr)}
+#feed .link,#upcomingFeed .link{grid-column:3}
+@media (max-width:560px){#feed,#upcomingFeed{grid-template-columns:minmax(0,1fr)}#feed .row,#upcomingFeed .row{grid-template-columns:2.4rem 56px minmax(0,1fr)}}
+@media (max-width:560px){.artist-list{grid-template-columns:minmax(0,1fr)}.row{grid-template-columns:2.4rem 56px 1fr;gap:.7rem}.art{width:56px;height:56px}.link{grid-column:3}.period-field{flex:1}.period-field select{min-width:0;width:100%}.panel-heading{align-items:flex-start}.artist-avatar{width:46px;height:46px;flex-basis:46px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div><h1>Artist Tracker</h1><p class="sub" id="count">Loading…</p></div></header>
+  <nav class="tabs" aria-label="Main navigation" role="tablist">
+    <button class="tab active" id="trackerTab" type="button" role="tab" aria-selected="true" aria-controls="trackerPanel">Artist Tracker</button>
+    <button class="tab" id="upcomingTab" type="button" role="tab" aria-selected="false" aria-controls="upcomingPanel">Upcoming</button>
+    <button class="tab" id="artistsTab" type="button" role="tab" aria-selected="false" aria-controls="artistsPanel">Artist Menu</button>
+  </nav>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+
+  <section id="trackerPanel" class="tab-panel" role="tabpanel" aria-labelledby="trackerTab">
+    <div class="panel-heading"><h2>Latest Releases</h2><button class="btn primary" id="checkBtn" type="button">Check for new releases</button></div>
+    <div class="period-controls" aria-label="Release period">
+      <label class="period-field" for="artistFilter">Artists
+        <select id="artistFilter"><option value="all" selected>All Artists</option><option value="favorites">Favorites Only</option></select>
+      </label>
+      <label class="period-field" for="periodSelect">Release period
+        <select id="periodSelect"><option value="recent" selected>Most Recent</option><option value="decade">Decade</option></select>
+      </label>
+      <label class="period-field" id="decadeField" for="decadeSelect" hidden>Decade<select id="decadeSelect"></select></label>
+      <label class="period-field" id="yearField" for="yearSelect" hidden>Year<select id="yearSelect"></select></label>
+    </div>
+    <fieldset class="filters" aria-label="Release types">
+      <label><input type="checkbox" value="album" checked> Albums <span class="n" data-n="album"></span></label>
+      <label><input type="checkbox" value="ep" checked> EPs <span class="n" data-n="ep"></span></label>
+      <label><input type="checkbox" value="single" checked> Singles <span class="n" data-n="single"></span></label>
+      <label><input type="checkbox" value="feature" checked> Features <span class="n" data-n="feature"></span></label>
+      <label><input type="checkbox" value="live" checked> Live <span class="n" data-n="live"></span></label>
+      <label><input type="checkbox" value="compilation" checked> Compilations <span class="n" data-n="compilation"></span></label>
+    </fieldset>
+    <div id="feed"></div>
+  </section>
+
+  <section id="upcomingPanel" class="tab-panel" role="tabpanel" aria-labelledby="upcomingTab" hidden>
+    <div class="panel-heading"><h2>Upcoming Releases</h2></div>
+    <p class="panel-sub">Announced albums, EPs, and singles that haven't come out yet, soonest first.</p>
+    <div class="period-controls">
+      <label class="period-field" for="upcomingScope">Artists
+        <select id="upcomingScope"><option value="all" selected>All Artists</option><option value="favorites">Favorites Only</option></select>
+      </label>
+    </div>
+    <div id="upcomingFeed"></div>
+  </section>
+
+  <section id="profilePanel" class="tab-panel" role="tabpanel" aria-label="Artist profile" hidden>
+    <button class="btn quiet back-btn" id="profileBack" type="button">← Back</button>
+    <div id="profile"></div>
+  </section>
+
+  <section id="artistsPanel" class="tab-panel" role="tabpanel" aria-labelledby="artistsTab" hidden>
+    <div class="artist-menu-grid">
+      <section class="artist-search"><h2>Find an artist</h2><p class="panel-sub">Search Apple Music and add artists to your tracker.</p>
+        <form id="searchForm"><input type="search" id="q" placeholder="Search artist name" aria-label="Search artist name" required><button class="btn primary" type="submit">Search</button></form>
+        <ul id="results" class="artist-list"></ul>
+      </section>
+      <section class="artist-library"><div class="panel-heading"><div><h2>Followed Artists</h2><p class="panel-sub" id="artistCount"></p></div></div>
+        <div class="artist-tools">
+          <input type="search" id="artistQuery" placeholder="Filter followed artists" aria-label="Filter followed artists" autocomplete="off">
+          <select id="artistView" aria-label="Show artists">
+            <option value="all">All</option>
+            <option value="favorites">Favorites</option>
+          </select>
+          <select id="artistSort" aria-label="Sort artists">
+            <option value="favorites">Favorites first</option>
+            <option value="alphabetical">A–Z</option>
+          </select>
+        </div>
+        <ul id="following" class="artist-list"></ul>
+        <button class="btn more-btn" id="moreArtists" type="button" hidden>Show more</button>
+      </section>
+    </div>
+  </section>
+</div>
+<script src="classify.js"></script>
+<script src="store.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+let releases = [], artists = [], lastResults = [], shown = 40;
+const FAVORITES_KEY = 'artistTracker.favoriteArtistIds';
+let favoriteArtistIds = loadFavoriteIds();
+let artistSort = 'favorites';
+let artistFilter = 'all';
+let upcomingScope = 'all';
+let artistQuery = '', artistView = 'all', artistsShown = 30;
+const ARTIST_PAGE = 30;
+let artworkByArtist = new Map();
+let loaded = false, currentTab = 'tracker', lastTab = 'tracker', openedFromApp = false;
+let profileArtist = null;
+const fold = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+let selectedPeriod = 'recent', selectedDecade = '', selectedYear = 'all';
+
+function loadFavoriteIds() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
+    return new Set(Array.isArray(stored) ? stored.map(String) : []);
+  } catch { return new Set(); }
+}
+function saveFavoriteIds() {
+  try { localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favoriteArtistIds])); }
+  catch { status('Could not save favorites in this browser.', true); }
+}
+function toggleFavorite(artistId) {
+  const id = String(artistId);
+  if (favoriteArtistIds.has(id)) favoriteArtistIds.delete(id);
+  else favoriteArtistIds.add(id);
+  saveFavoriteIds();
+  renderFollowing();
+  updateCounts();
+  renderFeed();
+  renderUpcoming();
+  rerenderProfile();
+}
+
+function api(path, opts) { return localApi(path, opts); }  // runs in the browser now (store.js)
+function status(text, isErr) { const s = $('#status'); s.textContent = text; s.className = 'status' + (isErr ? ' err' : ''); }
+
+function availableYears() {
+  return [...new Set(releases
+    .map(r => (r.release_date || '').slice(0, 4))
+    .filter(y => /^\d{4}$/.test(y))
+    .map(Number))].sort((a, b) => b - a);
+}
+function availableDecades() {
+  return [...new Set(availableYears().map(y => Math.floor(y / 10) * 10))]
+    .sort((a, b) => b - a);
+}
+function populatePeriodControls() {
+  const decades = availableDecades();
+  const decadeSelect = $('#decadeSelect');
+  const previousDecade = selectedDecade;
+  decadeSelect.replaceChildren();
+  for (const decade of decades) {
+    const option = document.createElement('option');
+    option.value = String(decade);
+    option.textContent = `${decade}s`;
+    decadeSelect.append(option);
+  }
+  if (decades.length) {
+    selectedDecade = decades.includes(Number(previousDecade)) ? previousDecade : String(decades[0]);
+    decadeSelect.value = selectedDecade;
+  } else {
+    selectedDecade = '';
+  }
+  populateYearOptions();
+  $('#periodSelect').value = selectedPeriod;
+  updatePeriodVisibility();
+}
+function populateYearOptions() {
+  const yearSelect = $('#yearSelect');
+  const decadeStart = Number(selectedDecade);
+  const years = availableYears().filter(y => Math.floor(y / 10) * 10 === decadeStart);
+  yearSelect.replaceChildren();
+  const all = document.createElement('option');
+  all.value = 'all';
+  all.textContent = 'All Years';
+  yearSelect.append(all);
+  for (const year of years) {
+    const option = document.createElement('option');
+    option.value = String(year);
+    option.textContent = String(year);
+    yearSelect.append(option);
+  }
+  if (selectedYear !== 'all' && !years.includes(Number(selectedYear))) selectedYear = 'all';
+  yearSelect.value = selectedYear;
+}
+function updatePeriodVisibility() {
+  const isDecade = selectedPeriod === 'decade';
+  $('#decadeField').hidden = !isDecade;
+  $('#yearField').hidden = !isDecade;
+  $('#decadeSelect').disabled = !availableDecades().length;
+  $('#yearSelect').disabled = !availableYears().some(y => Math.floor(y / 10) * 10 === Number(selectedDecade));
+}
+
+function load() {
+  return Promise.all([api('/artists'), api('/releases')])
+    .then(([artistData, releaseData]) => {
+      artists = artistData;
+      releases = releaseData;
+      artworkByArtist = new Map();
+      for (const r of releases) {
+        const id = Number(r.artist_id);
+        if (r.artwork_url && !artworkByArtist.has(id)) artworkByArtist.set(id, r.artwork_url);
+      }
+      populatePeriodControls();
+      renderAll();
+      if (!loaded) { loaded = true; routeFromHash(); }  // open a profile link like #artist/123
+    })
+    .catch(e => status('Could not load your data: ' + e.message, true));
+}
+
+function cleanName(n) { return (n || '').replace(/\s-\s(single|ep)$/i, ''); }
+const LABEL = { live: 'Live album', compilation: 'Compilation' };
+const trackSuffix = r => r.track_count > 1 ? ` · ${r.track_count} tracks` : '';
+function explicitTag() {
+  const e = el('span', 'explicit', 'E'); e.title = 'Explicit'; e.setAttribute('aria-label', 'Explicit'); return e;
+}
+const typeOf = r => r.category || (r.is_feature ? 'feature' : (r.kind || 'Album').toLowerCase());
+
+// Shared rule so the counts, the feed, and the Upcoming tab agree on "favorites only".
+function inArtistScope(r) {
+  return artistFilter !== 'favorites' || favoriteArtistIds.has(String(r.artist_id));
+}
+const isFavorite = r => favoriteArtistIds.has(String(r.artist_id));
+
+// Newest day first (undated last); within the same day, favorite artists first.
+function byDayThenFavorite(a, b) {
+  const da = a.release_date || '', db = b.release_date || '';
+  if (da !== db) {
+    if (!da) return 1;
+    if (!db) return -1;
+    return da < db ? 1 : -1;
+  }
+  return isFavorite(b) - isFavorite(a);
+}
+function updateCounts() {
+  const n = { album: 0, ep: 0, single: 0, feature: 0, live: 0, compilation: 0 };
+  for (const r of releases) {
+    if (!inArtistScope(r)) continue;
+    const t = typeOf(r);
+    n[t] = (n[t] || 0) + 1;
+  }
+  document.querySelectorAll('[data-n]').forEach(e => e.textContent = n[e.dataset.n]);
+}
+function inSelectedPeriod(r) {
+  const date = r.release_date || '';
+  if (selectedPeriod !== 'decade') return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const year = Number(date.slice(0, 4));
+  if (Math.floor(year / 10) * 10 !== Number(selectedDecade)) return false;
+  return selectedYear === 'all' || year === Number(selectedYear);
+}
+function visible() {
+  const on = new Set([...document.querySelectorAll('.filters input:checked')].map(i => i.value));
+  return releases.filter(r =>
+    inSelectedPeriod(r) &&
+    on.has(typeOf(r)) &&
+    inArtistScope(r)
+  ).sort(byDayThenFavorite);
+}
+
+function renderFeed() {
+  const feed = $('#feed'); feed.replaceChildren();
+  const today = new Date().toLocaleDateString('en-CA');
+  const weekAgoDate = new Date(); weekAgoDate.setDate(weekAgoDate.getDate() - 7);
+  const weekAgo = weekAgoDate.toLocaleDateString('en-CA');
+
+  // The tracker only shows releases that are already out; upcoming ones live in the Upcoming tab.
+  let list = visible().filter(r => !(r.release_date > today)), recentWeek = [];
+  if (selectedPeriod === 'recent') {
+    // "Most Recent" starts with a "Past week" section (last 7 days up to today), then the months.
+    recentWeek = list.filter(r => r.release_date >= weekAgo);
+    list = list.filter(r => !(r.release_date >= weekAgo));
+  }
+  const total = recentWeek.length + list.length;
+
+  const trackedCount = artistFilter === 'favorites'
+    ? artists.filter(a => favoriteArtistIds.has(String(a.artist_id))).length
+    : artists.length;
+  const trackedLabel = artistFilter === 'favorites' ? 'favorite artist' : 'followed artist';
+  $('#count').textContent = `${total} releases shown from ${trackedCount} ${trackedLabel}${trackedCount === 1 ? '' : 's'} (${releases.length} total stored releases)`;
+  if (!total) {
+    const message = !artists.length
+      ? 'Search for an artist and follow them to start your feed.'
+      : artistFilter === 'favorites' && trackedCount === 0
+        ? 'You have not favorited any artists yet. Mark artists with a star in the Artist Menu.'
+        : 'No releases match this period and these filters.';
+    feed.append(el('p', 'empty', message));
+    return;
+  }
+
+  const addRow = r => {
+    const row = el('article', 'row');
+    row.append(el('div', 'day', r.release_date ? String(parseInt(r.release_date.slice(8, 10), 10)) : '–'));
+    const img = el('img', 'art'); img.alt = ''; img.loading = 'lazy'; img.width = 64; img.height = 64;
+    if (r.artwork_url) img.src = r.artwork_url;
+    img.onerror = () => img.removeAttribute('src');
+    row.append(img);
+    const info = el('div'); const t = el('div', 'title', cleanName(r.name || ''));
+    if (r.explicit === 'explicit') t.append(explicitTag());
+    if (r.is_new) t.append(el('span', 'badge new', 'New'));
+    if (isFavorite(r)) t.append(el('span', 'badge fav', '★ Favorite'));
+    const cr = r.credited_artist || '';
+    const rest = r.is_feature ? ', Feature' + (cr && cr !== r.artist_name ? ` on ${cr}` : '') : `, ${LABEL[r.category] || r.kind || 'Album'}`;
+    const meta = el('div', 'meta'); meta.append(artistLink(r.artist_id, r.artist_name), rest + trackSuffix(r));
+    info.append(t, meta);
+    row.append(info);
+    if (r.url && r.url.startsWith('https://')) {
+      const a = el('a', 'link', 'Open in Apple Music'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; row.append(a);
+    }
+    feed.append(row);
+  };
+
+  if (recentWeek.length) {
+    feed.append(el('h2', 'month', 'Past week'));
+    for (const r of recentWeek) addRow(r);
+  }
+  let month = null;
+  for (const r of list.slice(0, shown)) {
+    const m = r.release_date ? r.release_date.slice(0, 7) : 'unknown';
+    if (m !== month) {
+      month = m;
+      const label = m === 'unknown' ? 'Date unknown' : new Date(+m.slice(0, 4), +m.slice(5, 7) - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      feed.append(el('h2', 'month', label));
+    }
+    addRow(r);
+  }
+  if (list.length > shown) {
+    const more = el('button', 'btn', `Show more (${list.length - shown} left)`);
+    more.type = 'button'; more.style.marginTop = '1rem';
+    more.onclick = () => { shown += 40; renderFeed(); };
+    feed.append(more);
+  }
+}
+
+function daysUntil(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((new Date(y, m - 1, d) - today) / 86400000);
+}
+
+function renderUpcoming() {
+  const feed = $('#upcomingFeed'); feed.replaceChildren();
+  const today = new Date().toLocaleDateString('en-CA');
+  const list = releases
+    .filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r.release_date || '') && r.release_date > today &&
+      (upcomingScope !== 'favorites' || favoriteArtistIds.has(String(r.artist_id))))
+    .sort((a, b) => a.release_date.localeCompare(b.release_date)
+      || isFavorite(b) - isFavorite(a)
+      || a.name.localeCompare(b.name));
+
+  $('#upcomingTab').textContent = list.length ? `Upcoming (${list.length})` : 'Upcoming';
+  if (!list.length) {
+    feed.append(el('p', 'empty', !artists.length
+      ? 'Follow some artists to see their announced releases here.'
+      : upcomingScope === 'favorites'
+        ? 'No upcoming releases from your favorite artists.'
+        : 'No announced releases right now. New ones show up after a check.'));
+    return;
+  }
+  let month = null;
+  for (const r of list) {
+    const m = r.release_date.slice(0, 7);
+    if (m !== month) {
+      month = m;
+      feed.append(el('h2', 'month', new Date(+m.slice(0, 4), +m.slice(5, 7) - 1, 1)
+        .toLocaleString('en-US', { month: 'long', year: 'numeric' })));
+    }
+    const row = el('article', 'row upcoming');
+    row.append(el('div', 'day', String(parseInt(r.release_date.slice(8, 10), 10))));
+    const img = el('img', 'art'); img.alt = ''; img.loading = 'lazy'; img.width = 64; img.height = 64;
+    if (r.artwork_url) img.src = r.artwork_url;
+    img.onerror = () => img.removeAttribute('src');
+    row.append(img);
+
+    const n = daysUntil(r.release_date);
+    const info = el('div');
+    const t = el('div', 'title', cleanName(r.name || ''));
+    if (r.explicit === 'explicit') t.append(explicitTag());
+    if (isFavorite(r)) t.append(el('span', 'badge fav', '★ Favorite'));
+    const cr = r.credited_artist || '';
+    const label = r.is_feature
+      ? 'Feature' + (cr && cr !== r.artist_name ? ` on ${cr}` : '')
+      : (LABEL[r.category] || r.kind || 'Album');
+    const meta = el('div', 'meta'); meta.append(artistLink(r.artist_id, r.artist_name), `, ${label}${trackSuffix(r)} · `);
+    meta.append(el('span', 'countdown', n === 1 ? 'Tomorrow' : `In ${n} days`));
+    info.append(t, meta);
+    row.append(info);
+    if (r.url && r.url.startsWith('https://')) {
+      const a = el('a', 'link', 'Open in Apple Music'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; row.append(a);
+    }
+    feed.append(row);
+  }
+}
+
+function artistArtwork(artistId) {
+  // Most recent stored release artwork, looked up from a map built once per load.
+  return artworkByArtist.get(Number(artistId)) || '';
+}
+function artistIdentity(name, artworkUrl, artistId) {
+  const identity = el('div', 'artist-identity'); const avatar = el('div', 'artist-avatar');
+  if (artworkUrl) {
+    const img = el('img'); img.src = artworkUrl; img.alt = ''; img.loading = 'lazy';
+    img.onerror = () => { avatar.textContent = (name || '?').slice(0, 1).toUpperCase(); };
+    avatar.append(img);
+  } else avatar.textContent = (name || '?').slice(0, 1).toUpperCase();
+  if (artistId != null) { const link = artistLink(artistId, name); link.classList.add('artist-name'); identity.append(avatar, link); }
+  else identity.append(avatar, el('span', 'artist-name', name));
+  return identity;
+}
+function renderFollowing() {
+  const ul = $('#following'); ul.replaceChildren();
+  const isFav = a => favoriteArtistIds.has(String(a.artist_id));
+  const favoriteCount = artists.filter(isFav).length;
+  const q = fold(artistQuery.trim());
+  const sorted = artists
+    .filter(a => (artistView !== 'favorites' || isFav(a)) && (!q || fold(a.name).includes(q)))
+    .sort((a, b) => {
+      if (artistSort === 'favorites' && isFav(a) !== isFav(b)) return isFav(a) ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+
+  const filtering = q || artistView === 'favorites';
+  $('#artistCount').textContent = `${artists.length} followed · ${favoriteCount} favorite${favoriteCount === 1 ? '' : 's'}` +
+    (filtering ? ` · ${sorted.length} shown` : '');
+  const more = $('#moreArtists');
+  more.hidden = true;
+
+  if (!sorted.length) {
+    ul.append(el('li', 'empty', !artists.length
+      ? 'No artists yet. Search on the left to add your first artist.'
+      : artistView === 'favorites' && !q && !favoriteCount
+        ? 'No favorites yet. Tap the star next to an artist.'
+        : 'No followed artists match your filter.'));
+    return;
+  }
+
+  const page = sorted.slice(0, artistsShown);
+  const mixed = sorted.some(isFav) && sorted.some(a => !isFav(a));
+  let group = null;
+  for (const a of page) {
+    const fav = isFav(a);
+    let g = null;
+    if (artistSort === 'alphabetical') {
+      const ch = fold(a.name).trim().charAt(0).toUpperCase();
+      g = /[A-Z]/.test(ch) ? ch : '#';
+    } else if (mixed) {
+      g = fav ? '★ Favorites' : 'Other artists';
+    }
+    if (g && g !== group) { group = g; ul.append(el('li', 'artist-group', g)); }
+
+    const li = el('li');
+    li.append(artistIdentity(a.name, artistArtwork(a.artist_id), a.artist_id));
+
+    const actions = el('div', 'artist-actions');
+    const favorite = el('button', 'favorite-btn', fav ? '★' : '☆');
+    favorite.type = 'button';
+    favorite.setAttribute('aria-label', (fav ? 'Remove ' : 'Add ') + a.name + (fav ? ' from favorites' : ' to favorites'));
+    favorite.setAttribute('aria-pressed', String(fav));
+    favorite.title = fav ? 'Remove from favorites' : 'Add to favorites';
+    favorite.onclick = () => toggleFavorite(a.artist_id);
+
+    const remove = el('button', 'btn quiet', 'Remove');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', 'Remove ' + a.name);
+    remove.onclick = async () => {
+      if (!confirm(`Remove ${a.name} from your artist tracker? Their releases will also be removed from your feed.`)) return;
+      try {
+        await api('/artists/' + a.artist_id, { method: 'DELETE' });
+        favoriteArtistIds.delete(String(a.artist_id));
+        saveFavoriteIds();
+        status(`Removed ${a.name}.`);
+        await load();
+      } catch (e) { status('Could not remove artist: ' + e.message, true); }
+    };
+    actions.append(favorite, remove);
+    li.append(actions);
+    ul.append(li);
+  }
+  if (sorted.length > artistsShown) {
+    more.textContent = `Show more (${sorted.length - artistsShown} left)`;
+    more.hidden = false;
+  }
+}
+function renderResults() {
+  const ul = $('#results'); ul.replaceChildren();
+  const followed = new Set(artists.map(a => a.artist_id));
+  for (const a of lastResults) {
+    const li = el('li'); const left = artistIdentity(a.name, a.artwork_url || artistArtwork(a.artist_id));
+    if (a.genre) left.append(el('small', null, a.genre));
+    const b = el('button', 'btn' + (followed.has(a.artist_id) ? '' : ' primary'), followed.has(a.artist_id) ? 'Following' : 'Follow');
+    b.type = 'button'; b.disabled = followed.has(a.artist_id);
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = 'Following…';
+      try {
+        const r = await api(`/artists/${a.artist_id}/follow`, { method: 'POST' });
+        status(`Following ${r.followed}.`);
+        await load();
+      } catch (e) { status('Could not follow: ' + e.message, true); b.disabled = false; b.textContent = 'Follow'; }
+    };
+    li.append(left, b); ul.append(li);
+  }
+}
+
+function renderAll() { updateCounts(); renderFeed(); renderUpcoming(); renderFollowing(); renderResults(); rerenderProfile(); }
+
+function selectTab(which) {
+  for (const t of ['tracker', 'upcoming', 'artists', 'profile']) {
+    const on = t === which;
+    $('#' + t + 'Panel').hidden = !on;
+    const tab = $('#' + t + 'Tab');  // the profile page has no tab button
+    if (tab) { tab.classList.toggle('active', on); tab.setAttribute('aria-selected', String(on)); }
+  }
+  if (which !== 'profile') { currentTab = lastTab = which; document.title = 'Release Tracker'; }
+}
+selectTab('tracker');
+
+// ---- artist profile pages: #artist/<id> in the address bar, so Back and bookmarks work ----
+function artistLink(id, name) {
+  const b = el('button', 'name-link', name);
+  b.type = 'button'; b.title = 'Open artist profile';
+  b.onclick = () => openArtist(id);
+  return b;
+}
+function openArtist(id) {
+  openedFromApp = true;
+  const target = '#artist/' + id;
+  if (location.hash === target) routeFromHash(); else location.hash = target;
+}
+function clearArtistHash() {
+  if (location.hash.startsWith('#artist/')) history.replaceState(null, '', location.pathname + location.search);
+  openedFromApp = false;
+}
+function goTab(which) { clearArtistHash(); selectTab(which); }
+function routeFromHash() {
+  const m = location.hash.match(/^#artist\/(\d+)$/);
+  if (m) showProfile(Number(m[1]));
+  else if (!$('#profilePanel').hidden) selectTab(lastTab);
+}
+
+const CAT_LABEL = { album: 'Album', ep: 'EP', single: 'Single', feature: 'Feature', live: 'Live album', compilation: 'Compilation' };
+const CAT_GROUPS = [['album', 'Albums'], ['ep', 'EPs'], ['single', 'Singles'], ['feature', 'Features'], ['live', 'Live albums'], ['compilation', 'Compilations']];
+const isoDate = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '');
+function fmtDate(d, withYear) {
+  const [y, m, day] = d.split('-').map(Number);
+  return new Date(y, m - 1, day).toLocaleString('en-US', withYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' });
+}
+function profileSection(title) { const s = el('section', 'profile-section'); s.append(el('h3', null, title)); return s; }
+function externalLink(url, text) {
+  const a = el('a', 'link', text); a.href = url; a.target = '_blank'; a.rel = 'noopener'; return a;
+}
+
+function showProfile(id) {
+  const artist = artists.find(a => Number(a.artist_id) === Number(id));
+  selectTab('profile');
+  window.scrollTo(0, 0);
+  if (!artist) {
+    profileArtist = null; document.title = 'Release Tracker';
+    $('#profile').replaceChildren(el('p', 'empty', 'This artist is not in your followed list.'));
+    return;
+  }
+  renderProfile(artist);
+}
+function rerenderProfile() {
+  if (profileArtist && !$('#profilePanel').hidden) renderProfile(profileArtist);
+}
+
+function discoGroup(title, items, open, showFullDate) {
+  const d = el('details', 'disco-group'); d.open = open;
+  d.append(el('summary', null, title));
+  const grid = el('div', 'disco-grid');
+  for (const r of items) {
+    const hasUrl = r.url && r.url.startsWith('https://');
+    const item = el(hasUrl ? 'a' : 'div', 'disco-item');
+    if (hasUrl) { item.href = r.url; item.target = '_blank'; item.rel = 'noopener'; }
+    const img = el('img'); img.alt = ''; img.loading = 'lazy';
+    if (r.artwork_url) img.src = r.artwork_url;
+    img.onerror = () => img.removeAttribute('src');
+    const title = el('span', 't', cleanName(r.name || ''));
+    if (r.explicit === 'explicit') title.append(explicitTag());
+    const when = isoDate(r.release_date) ? (showFullDate ? fmtDate(r.release_date, true) : r.release_date.slice(0, 4)) : '';
+    item.append(img, title, el('span', 'y', [when, r.track_count > 1 ? `${r.track_count} tracks` : ''].filter(Boolean).join(' · ')));
+    grid.append(item);
+  }
+  d.append(grid);
+  return d;
+}
+
+function renderProfile(artist) {
+  profileArtist = artist;
+  const id = Number(artist.artist_id), fav = favoriteArtistIds.has(String(id));
+  const box = $('#profile'); box.replaceChildren();
+  document.title = `${artist.name} · Release Tracker`;
+
+  const today = new Date().toLocaleDateString('en-CA');
+  const mine = releases.filter(r => Number(r.artist_id) === id);
+  const out = mine.filter(r => !(r.release_date > today));
+  const upcoming = mine.filter(r => r.release_date > today).sort((a, b) => a.release_date.localeCompare(b.release_date));
+  const dated = out.filter(r => isoDate(r.release_date));
+
+  // ---- header: artwork from their latest release, name, favorite star, Apple Music link
+  const head = el('div', 'profile-head');
+  const photo = el('div', 'profile-photo'), initial = (artist.name || '?').slice(0, 1).toUpperCase();
+  const imgUrl = artistArtwork(id);
+  if (imgUrl) {
+    const img = el('img'); img.src = imgUrl; img.alt = '';
+    img.onerror = () => { img.remove(); photo.textContent = initial; };
+    photo.append(img);
+  } else photo.textContent = initial;
+  const text = el('div');
+  const nameRow = el('div', 'profile-name'); nameRow.append(el('h2', null, artist.name));
+  const star = el('button', 'favorite-btn', fav ? '★' : '☆');
+  star.type = 'button'; star.setAttribute('aria-pressed', String(fav));
+  star.setAttribute('aria-label', (fav ? 'Remove ' : 'Add ') + artist.name + (fav ? ' from favorites' : ' to favorites'));
+  star.title = fav ? 'Remove from favorites' : 'Add to favorites';
+  star.onclick = () => toggleFavorite(id);
+  nameRow.append(star); text.append(nameRow);
+  // genres: Apple's genre on each stored release, most common first (shows after the next check for older data)
+  const genreCounts = new Map();
+  for (const r of mine) if (r.genre && r.genre !== 'Music') genreCounts.set(r.genre, (genreCounts.get(r.genre) || 0) + 1);
+  const genres = [...genreCounts].sort((a, b) => b[1] - a[1]).slice(0, 5).map(g => g[0]);
+  if (genres.length) { const chips = el('div', 'chips'); for (const g of genres) chips.append(el('span', 'chip', g)); text.append(chips); }
+  if (artist.url && artist.url.startsWith('https://')) {
+    const a = externalLink(artist.url, 'Open in Apple Music'); a.style.display = 'inline-block'; a.style.marginTop = '.5rem'; text.append(a);
+  }
+  head.append(photo, text); box.append(head);
+
+  // ---- at a glance
+  const counts = {};
+  for (const r of out) counts[typeOf(r)] = (counts[typeOf(r)] || 0) + 1;
+  const stats = profileSection('At a glance'), grid = el('div', 'stats');
+  const stat = (v, label) => { const d = el('div', 'stat'); d.append(el('b', null, String(v)), el('span', null, label)); grid.append(d); };
+  stat(out.length, 'Releases'); stat(counts.album || 0, 'Albums'); stat(counts.ep || 0, 'EPs'); stat(counts.single || 0, 'Singles');
+  if (dated.length) {
+    const dates = dated.map(r => r.release_date).sort();
+    stat(dates[0].slice(0, 4), 'First release'); stat(fmtDate(dates[dates.length - 1], true), 'Latest release');
+  }
+  stats.append(grid); box.append(stats);
+
+  // ---- discography, grouped by type (long groups start collapsed)
+  const disco = profileSection('Discography');
+  if (upcoming.length) disco.append(discoGroup(`Upcoming (${upcoming.length})`, upcoming, true, true));
+  for (const [cat, label] of CAT_GROUPS) {
+    const items = out.filter(r => typeOf(r) === cat);
+    if (items.length) disco.append(discoGroup(`${label} (${items.length})`, items, items.length <= 24, false));
+  }
+  if (!out.length && !upcoming.length) disco.append(el('p', 'meta', 'No releases stored for this artist yet.'));
+  box.append(disco);
+
+  // ---- release history: releases per year, then a dated list for each year
+  const hist = profileSection('Release history');
+  if (!dated.length) hist.append(el('p', 'meta', 'No dated releases yet.'));
+  else {
+    const byYear = new Map();
+    for (const r of dated) { const y = r.release_date.slice(0, 4); if (!byYear.has(y)) byYear.set(y, []); byYear.get(y).push(r); }
+    const years = [...byYear.keys()].sort((a, b) => b - a);
+    const max = Math.max(...[...byYear.values()].map(v => v.length));
+    const bars = el('div', 'year-bars'); bars.setAttribute('role', 'img'); bars.setAttribute('aria-label', 'Releases per year');
+    for (let y = Number(years[years.length - 1]); y <= Number(years[0]); y++) {
+      const n = (byYear.get(String(y)) || []).length, bar = el('div', 'bar');
+      bar.style.height = n ? Math.max(6, Math.round(n / max * 100)) + '%' : '0';
+      bar.title = `${y}: ${n} release${n === 1 ? '' : 's'}`;
+      bars.append(bar);
+    }
+    hist.append(bars, el('p', 'meta', years[years.length - 1] === years[0] ? years[0] : `${years[years.length - 1]} – ${years[0]}`));
+    years.forEach((y, i) => {
+      const list = byYear.get(y), d = el('details', 'year'); d.open = i === 0;
+      d.append(el('summary', null, `${y} · ${list.length} release${list.length === 1 ? '' : 's'}`));
+      for (const r of list) {
+        const row = el('div', 'hist-row'), body = el('span');
+        const hasUrl = r.url && r.url.startsWith('https://');
+        const title = el(hasUrl ? 'a' : 'span', 'hist-title', cleanName(r.name || ''));
+        if (hasUrl) { title.href = r.url; title.target = '_blank'; title.rel = 'noopener'; }
+        body.append(title);
+        if (r.explicit === 'explicit') body.append(explicitTag());
+        body.append(el('span', 'meta', ` · ${CAT_LABEL[typeOf(r)] || 'Album'}${trackSuffix(r)}`));
+        row.append(el('span', 'd', fmtDate(r.release_date, false)), body);
+        d.append(row);
+      }
+      hist.append(d);
+    });
+  }
+  box.append(hist);
+}
+
+$('#trackerTab').addEventListener('click', () => goTab('tracker'));
+$('#upcomingTab').addEventListener('click', () => goTab('upcoming'));
+$('#artistsTab').addEventListener('click', () => goTab('artists'));
+$('#profileBack').addEventListener('click', () => {
+  if (openedFromApp) { openedFromApp = false; history.back(); }   // return to where the click came from
+  else { clearArtistHash(); selectTab(lastTab); }
+});
+window.addEventListener('hashchange', () => { if (loaded) routeFromHash(); });
+$('#upcomingScope').addEventListener('change', e => { upcomingScope = e.target.value; renderUpcoming(); });
+$('#artistFilter').addEventListener('change', e => {
+  artistFilter = e.target.value;
+  shown = 40;
+  updateCounts();
+  renderFeed();
+});
+$('#artistSort').addEventListener('change', e => {
+  artistSort = e.target.value;
+  artistsShown = ARTIST_PAGE;
+  renderFollowing();
+});
+$('#artistView').addEventListener('change', e => {
+  artistView = e.target.value;
+  artistsShown = ARTIST_PAGE;
+  renderFollowing();
+});
+$('#artistQuery').addEventListener('input', e => {
+  artistQuery = e.target.value;
+  artistsShown = ARTIST_PAGE;
+  renderFollowing();
+});
+$('#artistQuery').addEventListener('keydown', e => {
+  if (e.key === 'Escape' && e.target.value) {
+    e.target.value = ''; artistQuery = ''; artistsShown = ARTIST_PAGE; renderFollowing();
+  }
+});
+$('#moreArtists').addEventListener('click', () => { artistsShown += ARTIST_PAGE; renderFollowing(); });
+$('#periodSelect').addEventListener('change', e => {
+  selectedPeriod = e.target.value;
+  if (selectedPeriod === 'decade') selectedYear = 'all';
+  shown = 40;
+  updatePeriodVisibility();
+  renderFeed();
+});
+$('#decadeSelect').addEventListener('change', e => {
+  selectedDecade = e.target.value;
+  selectedYear = 'all';
+  populateYearOptions();
+  shown = 40;
+  updatePeriodVisibility();
+  renderFeed();
+});
+$('#yearSelect').addEventListener('change', e => {
+  selectedYear = e.target.value;
+  shown = 40;
+  renderFeed();
+});
+let searchSeq = 0;
+function clearSearchResults() {
+  searchSeq++;                 // ignore any search still in flight
+  lastResults = [];
+  renderResults();
+  status('');
+}
+$('#searchForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const q = $('#q').value.trim(); if (!q) { clearSearchResults(); return; }
+  const seq = ++searchSeq;
+  try {
+    const found = await api('/search?q=' + encodeURIComponent(q));
+    if (seq !== searchSeq) return;   // box was cleared or a newer search started
+    lastResults = found;
+    renderResults();
+    status(lastResults.length ? '' : `No artists found for “${q}”.`);
+  } catch (err) { if (seq === searchSeq) status('Search failed: ' + err.message, true); }
+});
+// Emptying the box (typing, the clear "x", or Escape) removes the results.
+$('#q').addEventListener('input', e => { if (!e.target.value.trim()) clearSearchResults(); });
+$('#q').addEventListener('keydown', e => {
+  if (e.key === 'Escape' && e.target.value) { e.target.value = ''; clearSearchResults(); }
+});
+document.querySelectorAll('.filters input').forEach(i => i.addEventListener('change', () => { shown = 40; renderFeed(); }));
+$('#checkBtn').addEventListener('click', async e => {
+  const b = e.currentTarget; b.disabled = true; status('Checking for new releases…');
+  try { await api('/check-now', { method: 'POST' }); await load(); status('Check finished.'); }
+  catch (err) { status('Check failed: ' + err.message, true); }
+  b.disabled = false;
+});
+load().then(() => autoCheck()).then(ran => { if (ran) return load(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) autoCheck().then(ran => ran && load()); });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
