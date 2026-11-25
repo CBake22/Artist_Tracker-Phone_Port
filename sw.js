@@ -1,6 +1,6 @@
 // Offline app shell. Pages load instantly from the cache; each launch quietly checks GitHub for newer
 // copies (a tiny conditional request) and tells the page to reload once if anything changed.
-const V = 'tracker-v7';
+const V = 'tracker-v8';
 const SHELL = ['./', 'index.html', 'classify.js', 'store.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 const tag = r => r.headers.get('etag') || r.headers.get('last-modified') || '';
 const notify = () => self.clients.matchAll().then(cs => cs.forEach(c => c.postMessage('updated')));
