@@ -391,6 +391,14 @@ function releaseArtistNames(r) {
   const byId = new Map(artists.map(a => [Number(a.artist_id), a]));
   return releaseArtistIds(r).map(id => byId.get(Number(id))).filter(Boolean);
 }
+// Apple Music's artistName field contains the complete release credit, not just
+// artists we follow. Keep every credited name; only followed artists get profile links.
+function creditedArtistNames(r) {
+  const raw = String(r.credited_artist || '').trim();
+  const names = raw ? raw.split(/\s*,\s*/).map(x => x.trim()).filter(Boolean) : [];
+  const unique = [...new Map(names.map(name => [Classify.norm(name), name])).values()];
+  return unique.length ? unique : [r.artist_name || 'Unknown artist'];
+}
 
 // Newest day first (undated last); within the same day, favorite artists first.
 function byDayThenFavorite(a, b) {
@@ -436,13 +444,17 @@ function splitTitle(r) {
 }
 function metaLine(r) {
   const t = typeOf(r), m = el('div', 'meta'), cr = r.credited_artist || '', bits = [];
-  const creditedArtists = releaseArtistNames(r);
-  if (creditedArtists.length) {
-    creditedArtists.forEach((a, i) => { if (i) m.append(', '); m.append(artistLink(a.artist_id, a.name)); });
-  } else m.append(r.artist_name || 'Unknown artist');
+  const followedByName = new Map(artists.map(a => [Classify.norm(a.name), a]));
+  const credited = creditedArtistNames(r);
+  credited.forEach((name, i) => {
+    if (i) m.append(', ');
+    const followed = followedByName.get(Classify.norm(name));
+    m.append(followed ? artistLink(followed.artist_id, name) : name);
+  });
   m.append(' ', el('span', 'pill pill-' + t, CAT_LABEL[t] || 'Album'));
-  if (r.is_feature) { if (cr && cr !== r.artist_name) bits.push('on ' + cr); }
-  else if (splitTitle(r).guests) bits.push('feat. ' + splitTitle(r).guests);
+  // The full credit is already visible above. Only show title-level guest text
+  // separately when Apple returned a single credited artist.
+  if (credited.length === 1 && !r.is_feature && splitTitle(r).guests) bits.push('feat. ' + splitTitle(r).guests);
   if (r.track_count > 1) bits.push(r.track_count + ' tracks');
   if (bits.length) m.append(' · ' + bits.join(' · '));
   return m;
