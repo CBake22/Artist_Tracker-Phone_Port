@@ -292,10 +292,15 @@ function load() {
       artists = artistData;
       releases = releaseData;
       artworkByArtist = new Map();
-      for (const r of releases) {
-        const id = Number(r.artist_id);
-        if (r.artwork_url && !artworkByArtist.has(id)) artworkByArtist.set(id, r.artwork_url);
-      }
+      // Artist picture = cover of their newest released album or EP (no features, no unreleased).
+      // Artists with only singles fall back to their newest own single.
+      const todayStr = new Date().toLocaleDateString('en-CA');
+      const own = releases.filter(r => r.artwork_url && !r.is_feature && !(r.release_date > todayStr));
+      for (const pass of [['album', 'ep'], ['single']])
+        for (const r of own) {
+          const id = Number(r.artist_id);
+          if (pass.includes(r.category) && !artworkByArtist.has(id)) artworkByArtist.set(id, r.artwork_url);
+        }
       populatePeriodControls();
       renderAll();
       if (!loaded) { loaded = true; routeFromHash(); }  // open a profile link like #artist/123
