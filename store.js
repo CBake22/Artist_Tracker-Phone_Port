@@ -69,17 +69,37 @@ async function lookupArtist(id, limit = 200) {
 
 // ---------- IndexedDB ----------
 const dbp = new Promise((res, rej) => {
-  const q = indexedDB.open('release-tracker', 1);
-  q.onupgradeneeded = () => {
+  const q = indexedDB.open('release-tracker', 2);
+  q.onupgradeneeded = e => {
     const d = q.result;
-    d.createObjectStore('artists', { keyPath: 'artist_id' });
-    d.createObjectStore('releases', { keyPath: 'collection_id' }).createIndex('artist_id', 'artist_id');
-    d.createObjectStore('meta', { keyPath: 'key' });
+    if (e.oldVersion < 1) {
+      d.createObjectStore('artists', { keyPath: 'artist_id' });
+      const releases = d.createObjectStore('releases', { keyPath: 'collection_id' });
+      releases.createIndex('artist_id', 'artist_id');
+      releases.createIndex('artist_ids', 'artist_ids', { multiEntry: true });
+      d.createObjectStore('meta', { keyPath: 'key' });
+    } else if (e.oldVersion < 2) {
+      const releases = q.transaction.objectStore('releases');
+      releases.createIndex('artist_ids', 'artist_ids', { multiEntry: true });
+      // Convert existing single-owner rows without deleting or re-fetching any data.
+      releases.openCursor().onsuccess = event => {
+        const cursor = event.target.result;
+        if (!cursor) return;
+        const row = cursor.value;
+        if (!Array.isArray(row.artist_ids)) row.artist_ids = [row.artist_id];
+        cursor.update(row);
+        cursor.continue();
+      };
+    }
   };
   q.onsuccess = () => res(q.result);
   q.onerror = () => rej(q.error);
 });
 const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const creditedOwnerIds = (credited, arts) => {
+  const hay = ' ' + Classify.norm(credited) + ' ';
+  return arts.filter(a => { const name = Classify.norm(a.name); return name && hay.includes(' ' + name + ' '); }).map(a => Number(a.artist_id));
+};
 async function tx(stores, mode, fn) {
   const t = (await dbp).transaction(stores, mode);
   const done = new Promise((res, rej) => { t.oncomplete = res; t.onerror = t.onabort = () => rej(t.error); });
@@ -91,17 +111,26 @@ const DB = {
   artists: () => tx('artists', 'readonly', s => req(s.getAll()))
     .then(a => a.sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }))),
   allReleases: () => tx('releases', 'readonly', s => req(s.getAll())),
-  artistReleases: id => tx('releases', 'readonly', s => req(s.index('artist_id').getAll(id))),
+  artistReleases: id => tx('releases', 'readonly', s => req(s.index('artist_ids').getAll(id))),
   addArtist: a => tx('artists', 'readwrite', async s => { if (!await req(s.get(a.artist_id))) s.put(a); }),
   removeArtist: id => tx(['releases', 'artists'], 'readwrite', async (r, a) => {
-    for (const k of await req(r.index('artist_id').getAllKeys(id))) r.delete(k);
+    const rows = await req(r.index('artist_ids').getAll(id));
+    for (const row of rows) {
+      const owners = (Array.isArray(row.artist_ids) ? row.artist_ids : [row.artist_id]).filter(x => Number(x) !== Number(id));
+      if (!owners.length) r.delete(row.collection_id);
+      else r.put({ ...row, artist_ids: owners, artist_id: owners[0] });
+    }
     a.delete(id);
   }),
   // `detected` and first_seen_at are only set on first insert, like the SQL upsert.
-  addReleases: (id, list) => tx('releases', 'readwrite', async s => {
+  addReleases: (id, list) => tx(['releases', 'artists'], 'readwrite', async (s, a) => {
+    const followed = await req(a.getAll());
     for (const r of list) {
       const old = await req(s.get(r.collection_id));
-      s.put({ ...r, artist_id: id, detected: old ? old.detected : (r.detected || 0),
+      const owners = new Set([...(old?.artist_ids || (old ? [old.artist_id] : [])), id,
+        ...creditedOwnerIds(r.credited_artist, followed)].map(Number));
+      s.put({ ...old, ...r, artist_id: old?.artist_id ?? id, artist_ids: [...owners],
+              detected: old ? old.detected : (r.detected || 0),
               first_seen_at: old ? old.first_seen_at : Date.now() });
     }
   }),
@@ -112,9 +141,13 @@ const DB = {
     if (v && v.value === String(Classify.VERSION)) return 0;
     const arts = new Map((await req(a.getAll())).map(x => [x.artist_id, x]));
     const rows = await req(r.getAll());
+    const followed = [...arts.values()];
     for (const x of rows) {
       const ar = arts.get(x.artist_id); if (!ar) continue;
-      r.put({ ...x, ...Classify.classify(x.name, x.credited_artist || '', ar.name, ar.artist_id) });
+      const owners = new Set([...(x.artist_ids || [x.artist_id]),
+        ...creditedOwnerIds(x.credited_artist || '', followed)].map(Number));
+      r.put({ ...x, ...Classify.classify(x.name, x.credited_artist || '', ar.name, ar.artist_id),
+        artist_ids: [...owners] });
     }
     m.put({ key: 'classifier_version', value: String(Classify.VERSION) });
     return rows.length;
@@ -131,7 +164,9 @@ async function listReleases() {
     b.release_date.localeCompare(a.release_date) || b.collection_id - a.collection_id);
   const kept = [], lastDate = {}, lastRow = {};
   for (const r of rows) {
-    r.artist_name = names.get(r.artist_id) || '';
+    r.artist_ids = [...new Set((Array.isArray(r.artist_ids) ? r.artist_ids : [r.artist_id]).map(Number))];
+    r.artist_names = r.artist_ids.map(id => names.get(id)).filter(Boolean);
+    r.artist_name = names.get(r.artist_id) || r.artist_names[0] || '';
     r.is_feature = !!r.is_feature;
     r.is_new = !!r.detected && (Date.now() - (r.first_seen_at || 0)) <= Classify.NEW_FLAG_DAYS * 864e5;
     const key = r.dedupe_key, d = Classify.parseDate(r.release_date), prev = lastDate[key];

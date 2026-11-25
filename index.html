@@ -357,8 +357,11 @@ function load() {
       const own = releases.filter(r => r.artwork_url && !r.is_feature && !(r.release_date > todayStr));
       for (const pass of [['album', 'ep'], ['single']])
         for (const r of own) {
-          const id = Number(r.artist_id);
-          if (pass.includes(r.category) && !artworkByArtist.has(id)) artworkByArtist.set(id, r.artwork_url);
+          if (!pass.includes(r.category)) continue;
+          for (const ownerId of releaseArtistIds(r)) {
+            const id = Number(ownerId);
+            if (!artworkByArtist.has(id)) artworkByArtist.set(id, r.artwork_url);
+          }
         }
       populatePeriodControls();
       renderAll(); refreshUpdated();
@@ -379,10 +382,15 @@ const typeOf = r => {
 };
 
 // Shared rule so the counts, the feed, and the Upcoming tab agree on "favorites only".
+function releaseArtistIds(r) { return Array.isArray(r.artist_ids) && r.artist_ids.length ? r.artist_ids : [r.artist_id]; }
 function inArtistScope(r) {
-  return artistFilter !== 'favorites' || favoriteArtistIds.has(String(r.artist_id));
+  return artistFilter !== 'favorites' || releaseArtistIds(r).some(id => favoriteArtistIds.has(String(id)));
 }
-const isFavorite = r => favoriteArtistIds.has(String(r.artist_id));
+const isFavorite = r => releaseArtistIds(r).some(id => favoriteArtistIds.has(String(id)));
+function releaseArtistNames(r) {
+  const byId = new Map(artists.map(a => [Number(a.artist_id), a]));
+  return releaseArtistIds(r).map(id => byId.get(Number(id))).filter(Boolean);
+}
 
 // Newest day first (undated last); within the same day, favorite artists first.
 function byDayThenFavorite(a, b) {
@@ -428,7 +436,11 @@ function splitTitle(r) {
 }
 function metaLine(r) {
   const t = typeOf(r), m = el('div', 'meta'), cr = r.credited_artist || '', bits = [];
-  m.append(artistLink(r.artist_id, r.artist_name), ' ', el('span', 'pill pill-' + t, CAT_LABEL[t] || 'Album'));
+  const creditedArtists = releaseArtistNames(r);
+  if (creditedArtists.length) {
+    creditedArtists.forEach((a, i) => { if (i) m.append(', '); m.append(artistLink(a.artist_id, a.name)); });
+  } else m.append(r.artist_name || 'Unknown artist');
+  m.append(' ', el('span', 'pill pill-' + t, CAT_LABEL[t] || 'Album'));
   if (r.is_feature) { if (cr && cr !== r.artist_name) bits.push('on ' + cr); }
   else if (splitTitle(r).guests) bits.push('feat. ' + splitTitle(r).guests);
   if (r.track_count > 1) bits.push(r.track_count + ' tracks');
@@ -530,7 +542,7 @@ function renderUpcoming() {
   const today = new Date().toLocaleDateString('en-CA');
   const list = releases
     .filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r.release_date || '') && r.release_date > today &&
-      (upcomingScope !== 'favorites' || favoriteArtistIds.has(String(r.artist_id))))
+      (upcomingScope !== 'favorites' || isFavorite(r)))
     .sort((a, b) => a.release_date.localeCompare(b.release_date)
       || isFavorite(b) - isFavorite(a)
       || a.name.localeCompare(b.name));
@@ -766,7 +778,7 @@ function renderProfile(artist) {
   document.title = `${artist.name} · Release Tracker`;
 
   const today = new Date().toLocaleDateString('en-CA');
-  const mine = releases.filter(r => Number(r.artist_id) === id);
+  const mine = releases.filter(r => releaseArtistIds(r).some(ownerId => Number(ownerId) === id));
   const out = mine.filter(r => !(r.release_date > today));
   const upcoming = mine.filter(r => r.release_date > today).sort((a, b) => a.release_date.localeCompare(b.release_date));
   const dated = out.filter(r => isoDate(r.release_date));
@@ -982,7 +994,9 @@ async function removeArtistWithUndo(a) {
   await commitRemoval();  // finalise any earlier removal first
   const keepArtists = artists, keepReleases = releases;
   artists = artists.filter(x => x.artist_id !== a.artist_id);
-  releases = releases.filter(r => r.artist_id !== a.artist_id);
+  releases = releases.filter(r => !releaseArtistIds(r).some(id => Number(id) === Number(a.artist_id)) || releaseArtistIds(r).length > 1)
+    .map(r => releaseArtistIds(r).some(id => Number(id) === Number(a.artist_id))
+      ? { ...r, artist_ids: releaseArtistIds(r).filter(id => Number(id) !== Number(a.artist_id)) } : r);
   renderAll();
   const p = pending = { id: a.artist_id, timer: setTimeout(commitRemoval, 6000) };
   showToast(`Removed ${a.name}`, () => {

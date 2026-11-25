@@ -1,6 +1,6 @@
 // Port of Classify.py: pure rules, no network, no storage.
 const Classify = (() => {
-  const VERSION = 3, RECENT_DAYS = 30, NEW_FLAG_DAYS = 7, DUP_DAYS = 7;
+  const VERSION = 4, RECENT_DAYS = 30, NEW_FLAG_DAYS = 7, DUP_DAYS = 7;
   const SUFFIX = /\s-\s(single|ep)$/i;
   const FEAT = /[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s+([^\)\]]+)[\)\]]/gi;
   const LIVE = /[\(\[]\s*live\b|\s-\s*live\b|\blive\s+(?:at|in|from|on|session|sessions)\b|\bunplugged\b|\bin concert\b/i;
