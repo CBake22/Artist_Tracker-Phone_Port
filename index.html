@@ -152,15 +152,22 @@ h1{font-size:clamp(1.6rem,7vw,2.2rem)}
 .pill-album{color:var(--accent)}.pill-ep{color:#9B6BFF}.pill-single{color:#1FA38A}.pill-feature{color:#E0662B}.pill-live{color:#D6457A}
 .row .title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .ptr{position:fixed;top:env(safe-area-inset-top,0px);left:0;right:0;z-index:30;padding:.6rem;text-align:center;font-size:.85rem;color:var(--muted);background:var(--bg);transform:translateY(-100%);transition:transform .2s;pointer-events:none}
+.tab{position:relative;display:flex;flex-direction:column;align-items:center;gap:.15rem;padding:.55rem .5rem .4rem;font-size:.72rem}
+.tbadge{position:absolute;top:.25rem;left:calc(50% + .55rem);min-width:1.1rem;padding:0 .3rem;border-radius:99px;background:var(--accent);color:var(--on-accent);font-size:.65rem;font-weight:700;line-height:1.1rem;text-align:center}
+#feed .row,#upcomingFeed .row{align-items:start}
+.row{content-visibility:auto;contain-intrinsic-size:auto 88px}
+.toast{position:fixed;left:1rem;right:1rem;bottom:calc(5.4rem + env(safe-area-inset-bottom,0px));z-index:25;display:flex;align-items:center;justify-content:space-between;gap:.8rem;padding:.7rem .9rem;border-radius:10px;background:var(--ink);color:var(--bg);font-size:.9rem}
+.toast[hidden]{display:none}
+.toast .btn{color:var(--bg);border-color:currentColor}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header><div><h1>Artist Tracker</h1><p class="sub" id="count">Loading…</p><p class="sub updated" id="updated"></p></div><button class="btn primary" id="checkBtn" type="button" aria-label="Check for new releases">↻ Check</button></header>
   <nav class="tabs" aria-label="Main navigation" role="tablist">
-    <button class="tab active" id="trackerTab" type="button" role="tab" aria-selected="true" aria-controls="trackerPanel">Releases</button>
-    <button class="tab" id="upcomingTab" type="button" role="tab" aria-selected="false" aria-controls="upcomingPanel">Upcoming</button>
-    <button class="tab" id="artistsTab" type="button" role="tab" aria-selected="false" aria-controls="artistsPanel">Artists</button>
+    <button class="tab active" id="trackerTab" type="button" role="tab" aria-selected="true" aria-controls="trackerPanel"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg><span class="tl">Releases</span></button>
+    <button class="tab" id="upcomingTab" type="button" role="tab" aria-selected="false" aria-controls="upcomingPanel"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg><span class="tl">Upcoming</span><span class="tbadge" id="upCount" hidden></span></button>
+    <button class="tab" id="artistsTab" type="button" role="tab" aria-selected="false" aria-controls="artistsPanel"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-6.5 7-6.5s7 2.6 7 6.5"/></svg><span class="tl">Artists</span></button>
   </nav>
   <p class="status" id="status" role="status" aria-live="polite"></p>
 
@@ -229,6 +236,7 @@ h1{font-size:clamp(1.6rem,7vw,2.2rem)}
     </div>
   </section>
 </div>
+<div class="toast" id="toast" role="status" hidden></div>
 <script src="classify.js"></script>
 <script src="store.js"></script>
 <script>
@@ -284,6 +292,7 @@ function toggleFavorite(artistId) {
   if (favoriteArtistIds.has(id)) favoriteArtistIds.delete(id);
   else favoriteArtistIds.add(id);
   saveFavoriteIds();
+  releases.sort(byDayThenFavorite);
   renderFollowing();
   updateCounts();
   renderFeed();
@@ -340,7 +349,7 @@ function load() {
   return Promise.all([api('/artists'), api('/releases')])
     .then(([artistData, releaseData]) => {
       artists = artistData;
-      releases = releaseData;
+      releases = releaseData.sort(byDayThenFavorite);  // sorted once here, not on every render
       artworkByArtist = new Map();
       // Artist picture = cover of their newest released album or EP (no features, no unreleased).
       // Artists with only singles fall back to their newest own single.
@@ -408,7 +417,7 @@ function visible() {
     inSelectedPeriod(r) &&
     on.has(typeOf(r)) &&
     inArtistScope(r)
-  ).sort(byDayThenFavorite);
+  );
 }
 
 // "(feat. X)" leaves the title; guests show on the gray line instead.
@@ -468,7 +477,7 @@ function renderFeed() {
   const addRow = r => {
     const row = el('article', 'row');
     row.append(dayCell(r));
-    const img = el('img', 'art'); img.alt = ''; img.loading = 'lazy'; img.width = 64; img.height = 64;
+    const img = el('img', 'art'); img.alt = ''; img.loading = 'lazy'; img.decoding = 'async'; img.width = 64; img.height = 64;
     if (r.artwork_url) img.src = r.artwork_url;
     img.onerror = () => img.removeAttribute('src');
     row.append(img);
@@ -526,7 +535,7 @@ function renderUpcoming() {
       || isFavorite(b) - isFavorite(a)
       || a.name.localeCompare(b.name));
 
-  $('#upcomingTab').textContent = list.length ? `Upcoming (${list.length})` : 'Upcoming';
+  $('#upCount').textContent = list.length || ''; $('#upCount').hidden = !list.length;
   if (!list.length) {
     feed.append(el('p', 'empty', !artists.length
       ? 'Follow some artists to see their announced releases here.'
@@ -545,7 +554,7 @@ function renderUpcoming() {
     }
     const row = el('article', 'row upcoming');
     row.append(dayCell(r));
-    const img = el('img', 'art'); img.alt = ''; img.loading = 'lazy'; img.width = 64; img.height = 64;
+    const img = el('img', 'art'); img.alt = ''; img.loading = 'lazy'; img.decoding = 'async'; img.width = 64; img.height = 64;
     if (r.artwork_url) img.src = r.artwork_url;
     img.onerror = () => img.removeAttribute('src');
     row.append(img);
@@ -636,16 +645,7 @@ function renderFollowing() {
     const remove = el('button', 'btn quiet', 'Remove');
     remove.type = 'button';
     remove.setAttribute('aria-label', 'Remove ' + a.name);
-    remove.onclick = async () => {
-      if (!confirm(`Remove ${a.name} from your artist tracker? Their releases will also be removed from your feed.`)) return;
-      try {
-        await api('/artists/' + a.artist_id, { method: 'DELETE' });
-        favoriteArtistIds.delete(String(a.artist_id));
-        saveFavoriteIds();
-        status(`Removed ${a.name}.`);
-        await load();
-      } catch (e) { status('Could not remove artist: ' + e.message, true); }
-    };
+    remove.onclick = () => removeArtistWithUndo(a);
     actions.append(favorite, remove);
     li.append(actions);
     ul.append(li);
@@ -963,6 +963,34 @@ setInterval(refreshUpdated, 60000);
     if (go && !$('#checkBtn').disabled) $('#checkBtn').click();
   });
 })();
+let pending = null;  // artist removal waiting out its undo window
+const hideToast = () => { $('#toast').hidden = true; };
+function showToast(msg, onUndo) {
+  const t = $('#toast'), b = el('button', 'btn quiet', 'Undo'); b.type = 'button'; b.onclick = onUndo;
+  t.replaceChildren(el('span', null, msg), b); t.hidden = false;
+}
+async function commitRemoval() {
+  if (!pending) return;
+  const p = pending; pending = null; clearTimeout(p.timer); hideToast();
+  try {
+    await api('/artists/' + p.id, { method: 'DELETE' });
+    favoriteArtistIds.delete(String(p.id)); saveFavoriteIds();
+  } catch (e) { status('Could not remove artist: ' + e.message, true); }
+  await load();
+}
+async function removeArtistWithUndo(a) {
+  await commitRemoval();  // finalise any earlier removal first
+  const keepArtists = artists, keepReleases = releases;
+  artists = artists.filter(x => x.artist_id !== a.artist_id);
+  releases = releases.filter(r => r.artist_id !== a.artist_id);
+  renderAll();
+  const p = pending = { id: a.artist_id, timer: setTimeout(commitRemoval, 6000) };
+  showToast(`Removed ${a.name}`, () => {
+    if (pending !== p) return;
+    clearTimeout(p.timer); pending = null; artists = keepArtists; releases = keepReleases; hideToast(); renderAll();
+  });
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) commitRemoval(); });
 $('#exportBtn').addEventListener('click', async () => {
   const data = { app: 'artist-tracker', version: 1, exported: new Date().toISOString(),
     artists: artists.map(a => ({ artist_id: a.artist_id, name: a.name, url: a.url })), favorites: [...favoriteArtistIds] };
