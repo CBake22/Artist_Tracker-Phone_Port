@@ -95,7 +95,6 @@ li small{display:block;color:var(--muted)}
 .profile-photo img{width:100%;height:100%;object-fit:cover}
 .profile-name{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
 .profile-name h2{margin:0;font-size:clamp(1.6rem,4vw,2.4rem);font-weight:800;letter-spacing:-.03em;line-height:1.1;overflow-wrap:anywhere}
-.explicit{display:inline-block;margin-left:.45rem;padding:.12rem .3rem;border-radius:3px;background:var(--muted);color:var(--bg);font-size:.65rem;font-weight:800;line-height:1;vertical-align:middle}
 .chips{display:flex;flex-wrap:wrap;gap:.4rem;margin:.6rem 0 0}
 .chip{border:1px solid var(--line);border-radius:99px;padding:.1rem .7rem;font-size:.85rem;color:var(--muted)}
 .profile-section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.1rem;margin-bottom:1.25rem}
@@ -373,9 +372,6 @@ function load() {
 function cleanName(n) { return (n || '').replace(/\s-\s(single|ep)$/i, ''); }
 const LABEL = { live: 'Live album', compilation: 'Compilation' };
 const trackSuffix = r => r.track_count > 1 ? ` · ${r.track_count} tracks` : '';
-function explicitTag() {
-  const e = el('span', 'explicit', 'E'); e.title = 'Explicit'; e.setAttribute('aria-label', 'Explicit'); return e;
-}
 const typeOf = r => {
   const t = r.category || (r.is_feature ? 'feature' : (r.kind || 'Album').toLowerCase());
   return t === 'compilation' ? 'album' : t;  // no separate Compilations filter
@@ -526,7 +522,6 @@ function renderFeed() {
     img.onerror = () => img.removeAttribute('src');
     row.append(img);
     const info = el('div'); const t = el('div', 'title', splitTitle(r).title);
-    if (r.explicit === 'explicit') t.append(explicitTag());
     if (r.is_new) t.append(el('span', 'badge new', 'New'));
     if (isFavorite(r)) t.append(el('span', 'badge fav', '★ Favorite'));
     const meta = metaLine(r);
@@ -606,7 +601,6 @@ function renderUpcoming() {
     const n = daysUntil(r.release_date);
     const info = el('div');
     const t = el('div', 'title', splitTitle(r).title);
-    if (r.explicit === 'explicit') t.append(explicitTag());
     if (isFavorite(r)) t.append(el('span', 'badge fav', '★ Favorite'));
     const meta = metaLine(r); meta.append(' · ');
     meta.append(el('span', 'countdown', n === 1 ? 'Tomorrow' : `In ${n} days`));
@@ -794,7 +788,6 @@ function discoGroup(title, items, open, showFullDate) {
     if (r.artwork_url) img.src = r.artwork_url;
     img.onerror = () => img.removeAttribute('src');
     const title = el('span', 't', cleanName(r.name || ''));
-    if (r.explicit === 'explicit') title.append(explicitTag());
     const when = isoDate(r.release_date) ? (showFullDate ? fmtDate(r.release_date, true) : r.release_date.slice(0, 4)) : '';
     item.append(img, title, el('span', 'y', [when, r.track_count > 1 ? `${r.track_count} tracks` : ''].filter(Boolean).join(' · ')));
     grid.append(item);
@@ -889,7 +882,6 @@ function renderProfile(artist) {
         const title = el(hasUrl ? 'a' : 'span', 'hist-title', cleanName(r.name || ''));
         if (hasUrl) { title.href = r.url; title.target = '_blank'; title.rel = 'noopener'; }
         body.append(title);
-        if (r.explicit === 'explicit') body.append(explicitTag());
         body.append(el('span', 'meta', ` · ${CAT_LABEL[typeOf(r)] || 'Album'}${trackSuffix(r)}`));
         row.append(el('span', 'd', fmtDate(r.release_date, false)), body);
         d.append(row);
