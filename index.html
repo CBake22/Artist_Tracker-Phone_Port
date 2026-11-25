@@ -158,6 +158,7 @@ h1{font-size:clamp(1.6rem,7vw,2.2rem)}
 .toast{position:fixed;left:1rem;right:1rem;bottom:calc(5.4rem + env(safe-area-inset-bottom,0px));z-index:25;display:flex;align-items:center;justify-content:space-between;gap:.8rem;padding:.7rem .9rem;border-radius:10px;background:var(--ink);color:var(--bg);font-size:.9rem}
 .toast[hidden]{display:none}
 .toast .btn{color:var(--bg);border-color:currentColor}
+.artist-label{display:flex;flex-direction:column;min-width:0}.artist-check{display:block;color:var(--muted);font-size:.72rem;margin-top:.1rem}.artist-check.err{color:var(--err)}
 </style>
 </head>
 <body>
@@ -250,6 +251,7 @@ let upcomingScope = 'all';
 let artistQuery = '', artistView = 'all', artistsShown = 30;
 const ARTIST_PAGE = 30;
 let artworkByArtist = new Map();
+let artistCheckStatuses = {};
 let loaded = false, currentTab = 'tracker', lastTab = 'tracker', openedFromApp = false;
 let profileArtist = null;
 const fold = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -345,9 +347,10 @@ function updatePeriodVisibility() {
 }
 
 function load() {
-  return Promise.all([api('/artists'), api('/releases')])
-    .then(([artistData, releaseData]) => {
+  return Promise.all([api('/artists'), api('/releases'), DB.getMeta('artist_check_status')])
+    .then(([artistData, releaseData, checkStatus]) => {
       artists = artistData;
+      try { artistCheckStatuses = JSON.parse(checkStatus || '{}'); } catch { artistCheckStatuses = {}; }
       releases = releaseData.sort(byDayThenFavorite);  // sorted once here, not on every render
       artworkByArtist = new Map();
       // Artist picture = cover of their newest released album or EP (no features, no unreleased).
@@ -403,7 +406,8 @@ function creditedArtistNames(r) {
   const primary = splitArtistCredits(r.credited_artist || r.artist_name || '', followedByName, !!splitTitle(r).guests);
   // Apple sometimes returns only the primary artist in artistName, while guests
   // are present in collectionName, e.g. "Hell Nah (feat. J. Cole & Anderson .Paak)".
-  const rawGuests = splitTitle(r).guests;
+  const rawGuests = Array.isArray(r.featured_artists) && r.featured_artists.length
+    ? r.featured_artists.join(' & ') : splitTitle(r).guests;
   const guests = splitArtistCredits(rawGuests, followedByName, true);
   const guestKeys = new Set(guests.map(Classify.norm));
   const uniquePrimary = [...new Map(primary.filter(n => !guestKeys.has(Classify.norm(n)))
@@ -670,7 +674,16 @@ function renderFollowing() {
     if (g && g !== group) { group = g; ul.append(el('li', 'artist-group', g)); }
 
     const li = el('li');
-    li.append(artistIdentity(a.name, artistArtwork(a.artist_id), a.artist_id));
+    const identity = artistIdentity(a.name, artistArtwork(a.artist_id), a.artist_id);
+    const check = artistCheckStatuses[a.artist_id];
+    if (check) {
+      const nameNode = identity.querySelector('.artist-name');
+      const label = el('div', 'artist-label');
+      if (nameNode) { nameNode.replaceWith(label); label.append(nameNode); }
+      const detail = check.status === 'error' ? 'Last check failed' : `Checked ${new Date(check.checked_at).toLocaleDateString()}`;
+      label.append(el('small', 'artist-check' + (check.status === 'error' ? ' err' : ''), detail));
+    }
+    li.append(identity);
 
     const actions = el('div', 'artist-actions');
     const favorite = el('button', 'favorite-btn', fav ? '★' : '☆');
@@ -971,7 +984,8 @@ $('#q').addEventListener('keydown', e => {
 document.querySelectorAll('.filters input').forEach(i => i.addEventListener('change', () => { shown = 40; renderFeed(); }));
 $('#checkBtn').addEventListener('click', async e => {
   const b = e.currentTarget; b.disabled = true; status('Checking for new releases…');
-  try { await api('/check-now', { method: 'POST' }); await load(); status('Check finished.'); }
+  try { const result = await api('/check-now', { method: 'POST' }); await load();
+    status(result.failed ? `Check finished with ${result.failed} error${result.failed === 1 ? '' : 's'}; ${result.succeeded} artists updated.` : `Check finished. ${result.succeeded} artists checked; ${result.found} new releases found.` , result.failed > 0); }
   catch (err) { status('Check failed: ' + err.message, true); }
   b.disabled = false;
 });
@@ -1030,13 +1044,14 @@ async function removeArtistWithUndo(a) {
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) commitRemoval(); });
 $('#exportBtn').addEventListener('click', async () => {
-  const data = { app: 'artist-tracker', version: 1, exported: new Date().toISOString(),
-    artists: artists.map(a => ({ artist_id: a.artist_id, name: a.name, url: a.url })), favorites: [...favoriteArtistIds] };
-  const file = new File([JSON.stringify(data, null, 2)], `artist-tracker-backup-${new Date().toLocaleDateString('en-CA')}.json`, { type: 'application/json' });
   try {
-    if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file] });  // iOS share sheet -> Save to Files
+    const db = await DB.exportData();
+    const data = { app: 'artist-tracker', version: 2, exported: new Date().toISOString(),
+      artists: db.artists, releases: db.releases, meta: db.meta, favorites: [...favoriteArtistIds] };
+    const file = new File([JSON.stringify(data, null, 2)], `artist-tracker-backup-${new Date().toLocaleDateString('en-CA')}.json`, { type: 'application/json' });
+    if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file] });
     else { const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
-    status(`Exported ${artists.length} artists.`);
+    status(`Exported ${db.artists.length} artists and ${db.releases.length} releases.`);
   } catch (e) { if (e.name !== 'AbortError') status('Export failed: ' + e.message, true); }
 });
 $('#importBtn').addEventListener('click', () => $('#importFile').click());
@@ -1044,19 +1059,26 @@ $('#importFile').addEventListener('change', async e => {
   const f = e.target.files[0]; e.target.value = ''; if (!f) return;
   try {
     const d = JSON.parse(await f.text());
-    if (!Array.isArray(d.artists)) throw new Error('not a backup file');
-    const have = new Set(artists.map(a => Number(a.artist_id)));
-    const todo = d.artists.filter(a => !have.has(Number(a.artist_id)));
-    let done = 0, failed = 0;
-    for (const a of todo) {
-      status(`Restoring ${done + failed + 1} of ${todo.length}: ${a.name}…`);
-      try { await api(`/artists/${a.artist_id}/follow`, { method: 'POST' }); done++; } catch { failed++; }
-      await new Promise(r => setTimeout(r, 300));
+    if (d.app !== 'artist-tracker' || !Array.isArray(d.artists)) throw new Error('Not a valid Artist Tracker backup');
+    if (d.releases != null && !Array.isArray(d.releases)) throw new Error('Backup release data is invalid');
+    if (d.artists.length > 10000 || (d.releases || []).length > 100000) throw new Error('Backup is unexpectedly large');
+    let result;
+    if (Array.isArray(d.releases)) {
+      result = await DB.restoreData(d);
+    } else {
+      // Backward compatibility with v1 backups, which contained artists but no release records.
+      let restored = 0, failed = 0;
+      for (const a of d.artists) {
+        try { await api(`/artists/${Number(a.artist_id)}/follow`, { method: 'POST' }); restored++; }
+        catch { failed++; }
+        await new Promise(r => setTimeout(r, 300));
+      }
+      result = { artists: restored, releases: 0, failed };
     }
     for (const id of d.favorites || []) favoriteArtistIds.add(String(id));
     saveFavoriteIds();
     await load();
-    status(`Restored ${done} artist${done === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}.`, failed > 0);
+    status(`Restored ${result.artists} artists${Array.isArray(d.releases) ? ` and ${result.releases} releases` : ' from legacy backup'}${result.failed ? `; ${result.failed} failed` : ''}.`, !!result.failed);
   } catch (err) { status('Import failed: ' + err.message, true); }
 });
 load().then(() => autoCheck()).then(ran => { if (ran) return load(); });

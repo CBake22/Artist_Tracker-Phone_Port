@@ -22,15 +22,39 @@ async function get(path, params) {
     try {
       let data;
       try {
-        const r = await fetch(url);
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        data = await r.json();
-      } catch (e) { if (e instanceof TypeError) data = await jsonp(url); else throw e; }
-      if (!data || typeof data !== 'object') throw new Error('unexpected response');
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        let response;
+        try { response = await fetch(url, { signal: controller.signal }); }
+        finally { clearTimeout(timer); }
+        if (!response.ok) {
+          const err = new Error('HTTP ' + response.status);
+          err.status = response.status;
+          throw err;
+        }
+        data = await response.json();
+      } catch (e) {
+        if (e instanceof TypeError) data = await jsonp(url);
+        else throw e;
+      }
+      if (!data || typeof data !== 'object' || !Array.isArray(data.results))
+        throw new Error('Unexpected Apple Music response');
       return data;
-    } catch (e) { last = e; await sleep(1500 * (i + 1)); }
+    } catch (e) {
+      last = e;
+      // Do not retry permanent client errors; retry rate limits, server errors and network failures.
+      if (e.status && e.status >= 400 && e.status < 500 && e.status !== 429) break;
+      if (i < 2) await sleep(Math.min(8000, 1000 * (2 ** i)));
+    }
   }
-  throw new Error('iTunes API unavailable: ' + last.message);
+  throw new Error('Apple Music request failed: ' + (last?.message || 'unknown error'));
+}
+const FEATURE_CREDIT_RX = /[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s+([^\)\]]+)[\)\]]/gi;
+function featuredCredits(title) {
+  const matches = [...String(title || '').matchAll(FEATURE_CREDIT_RX)];
+  const raw = matches.flatMap(m => String(m[1]).split(/\s*(?:,|&|\band\b)\s*/i))
+    .map(x => x.trim()).filter(Boolean);
+  return [...new Map(raw.map(name => [Classify.norm(name), name])).values()];
 }
 async function searchArtists(term, limit = 10) {
   const d = await get('/search', { term, entity: 'musicArtist', limit, country: 'us' });
@@ -43,7 +67,8 @@ function parseRelease(x, followed, artistId) {
   const date = String(x.releaseDate || '').slice(0, 10), url = x.collectionViewUrl || '';
   const credited = String(x.artistName || '');
   return {
-    collection_id: cid, name,
+    collection_id: cid, name, primary_artist_credit: credited, primary_artists: credited ? [credited] : [],
+    featured_artists: featuredCredits(name),
     release_date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '',
     url: url.startsWith('https://') ? url : null,
     artwork_url: String(x.artworkUrl100 || '').replace('100x100', '600x600'),
@@ -69,7 +94,7 @@ async function lookupArtist(id, limit = 200) {
 
 // ---------- IndexedDB ----------
 const dbp = new Promise((res, rej) => {
-  const q = indexedDB.open('release-tracker', 2);
+  const q = indexedDB.open('release-tracker', 3);
   q.onupgradeneeded = e => {
     const d = q.result;
     if (e.oldVersion < 1) {
@@ -128,11 +153,36 @@ const DB = {
     for (const r of list) {
       const old = await req(s.get(r.collection_id));
       const owners = new Set([...(old?.artist_ids || (old ? [old.artist_id] : [])), id,
-        ...creditedOwnerIds(r.credited_artist, followed)].map(Number));
+        ...creditedOwnerIds([r.credited_artist, ...(r.featured_artists || [])].filter(Boolean).join(' '), followed)].map(Number));
       s.put({ ...old, ...r, artist_id: old?.artist_id ?? id, artist_ids: [...owners],
               detected: old ? old.detected : (r.detected || 0),
               first_seen_at: old ? old.first_seen_at : Date.now() });
     }
+  }),
+  exportData: () => tx(['artists', 'releases', 'meta'], 'readonly', async (a, r, m) => ({
+    artists: await req(a.getAll()), releases: await req(r.getAll()), meta: await req(m.getAll())
+  })),
+  restoreData: data => tx(['artists', 'releases', 'meta'], 'readwrite', async (a, r, m) => {
+    for (const artist of data.artists || []) {
+      const id = Number(artist.artist_id);
+      if (!Number.isFinite(id) || !artist.name) continue;
+      const old = await req(a.get(id));
+      a.put({ ...old, ...artist, artist_id: id });
+    }
+    for (const release of data.releases || []) {
+      const id = Number(release.collection_id);
+      if (!Number.isFinite(id) || !release.name) continue;
+      const old = await req(r.get(id));
+      const owners = new Set([...(old?.artist_ids || (old ? [old.artist_id] : [])),
+        ...(release.artist_ids || (release.artist_id != null ? [release.artist_id] : []))].map(Number).filter(Number.isFinite));
+      const merged = { ...release, ...old, ...release, collection_id: id,
+        artist_ids: [...owners], artist_id: old?.artist_id ?? release.artist_id ?? [...owners][0],
+        detected: old ? old.detected : (release.detected || 0),
+        first_seen_at: old?.first_seen_at || release.first_seen_at || Date.now() };
+      r.put(merged);
+    }
+    for (const item of data.meta || []) if (item?.key) m.put(item);
+    return { artists: (data.artists || []).length, releases: (data.releases || []).length };
   }),
   getMeta: k => tx('meta', 'readonly', async s => (await req(s.get(k)))?.value),
   setMeta: (k, v) => tx('meta', 'readwrite', async s => { s.put({ key: k, value: String(v) }); }),
@@ -145,8 +195,11 @@ const DB = {
     for (const x of rows) {
       const ar = arts.get(x.artist_id); if (!ar) continue;
       const owners = new Set([...(x.artist_ids || [x.artist_id]),
-        ...creditedOwnerIds(x.credited_artist || '', followed)].map(Number));
+        ...creditedOwnerIds([x.credited_artist || '', ...(x.featured_artists || featuredCredits(x.name))].filter(Boolean).join(' '), followed)].map(Number));
       r.put({ ...x, ...Classify.classify(x.name, x.credited_artist || '', ar.name, ar.artist_id),
+        primary_artist_credit: x.primary_artist_credit || x.credited_artist || '',
+        primary_artists: x.primary_artists || (x.credited_artist ? [x.credited_artist] : []),
+        featured_artists: x.featured_artists?.length ? x.featured_artists : featuredCredits(x.name),
         artist_ids: [...owners] });
     }
     m.put({ key: 'classifier_version', value: String(Classify.VERSION) });
@@ -183,8 +236,9 @@ async function listReleases() {
 
 // ---------- checking for new releases ----------
 async function checkArtist(artist) {
+  const started = Date.now();
   const data = await lookupArtist(artist.artist_id);
-  if (!data) return 0;
+  if (!data) throw new Error('Artist was not returned by Apple Music');
   const existing = await DB.artistReleases(artist.artist_id);
   const known = new Set(existing.map(r => r.collection_id)), seen = {};
   for (const r of existing) {
@@ -192,34 +246,52 @@ async function checkArtist(artist) {
     if (r.dedupe_key && d !== null) (seen[r.dedupe_key] ||= []).push(d);
   }
   let found = 0;
-  for (const r of data.releases) {  // newest first
+  for (const r of data.releases) {
     if (!known.has(r.collection_id)) {
       r.detected = Classify.isRecent(r.release_date) && !Classify.isRepeat(r.dedupe_key, r.release_date, seen) ? 1 : 0;
       found += r.detected;
     }
     const d = Classify.parseDate(r.release_date);
-    if (d !== null) (seen[r.dedupe_key] ||= []).push(d);
+    if (r.dedupe_key && d !== null) (seen[r.dedupe_key] ||= []).push(d);
   }
   await DB.addReleases(artist.artist_id, data.releases);
-  return found;
+  return { found, releases: data.releases.length, duration_ms: Date.now() - started };
 }
 let checking = false;
 async function checkReleases() {
-  if (checking) return;
+  if (checking) return { skipped: true, succeeded: 0, failed: 0, found: 0 };
   checking = true;
+  const summary = { skipped: false, succeeded: 0, failed: 0, found: 0, errors: [] };
   try {
-    for (const a of await DB.artists()) {
-      try { await checkArtist(a); } catch (e) { console.error('Check failed for', a.name, e); }
-      await sleep(300);  // stay well under iTunes' rate limit
+    const artists = await DB.artists();
+    let statuses = {};
+    try { statuses = JSON.parse(await DB.getMeta('artist_check_status') || '{}'); } catch {}
+    for (const a of artists) {
+      const started = Date.now();
+      try {
+        const result = await checkArtist(a);
+        summary.succeeded++; summary.found += result.found;
+        statuses[a.artist_id] = { status: 'success', checked_at: Date.now(), releases: result.releases,
+          new_releases: result.found, duration_ms: result.duration_ms, error: '' };
+      } catch (e) {
+        summary.failed++; summary.errors.push({ artist: a.name, message: e.message });
+        statuses[a.artist_id] = { status: 'error', checked_at: Date.now(), duration_ms: Date.now() - started, error: e.message };
+        console.error('Check failed for', a.name, e);
+      }
+      await DB.setMeta('artist_check_status', JSON.stringify(statuses));
+      await sleep(300);
     }
-    await DB.setMeta('last_check', Date.now());
+    await DB.setMeta('last_attempt', Date.now());
+    if (!summary.failed) await DB.setMeta('last_check', Date.now());
+    return summary;
   } finally { checking = false; }
 }
 // Called on open and when the app returns to the foreground. Returns true if it ran.
 async function autoCheck() {
   await ready;
   if (checking || !(await DB.artists()).length) return false;
-  if (Date.now() - Number(await DB.getMeta('last_check') || 0) < CHECK_EVERY_MS) return false;
+  const lastAttempt = Number(await DB.getMeta('last_attempt') || await DB.getMeta('last_check') || 0);
+  if (Date.now() - lastAttempt < CHECK_EVERY_MS) return false;
   await checkReleases();
   return true;
 }
