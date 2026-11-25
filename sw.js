@@ -1,9 +1,13 @@
-// Offline app shell: serve cached files instantly, refresh them in the background.
-// Bump V when you deploy changes so old caches are dropped.
-const V = 'tracker-v4';
+// Offline app shell. Pages load instantly from the cache; each launch quietly checks GitHub for newer
+// copies (a tiny conditional request) and tells the page to reload once if anything changed.
+const V = 'tracker-v5';
 const SHELL = ['./', 'index.html', 'classify.js', 'store.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
+const tag = r => r.headers.get('etag') || r.headers.get('last-modified') || '';
+const notify = () => self.clients.matchAll().then(cs => cs.forEach(c => c.postMessage('updated')));
+
 self.addEventListener('install', e => e.waitUntil(
-  caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
+  // cache:'reload' skips the browser's HTTP cache so a stale copy can never be stored
+  caches.open(V).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(
   caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => clients.claim())));
 self.addEventListener('fetch', e => {
@@ -11,7 +15,15 @@ self.addEventListener('fetch', e => {
   if (r.method !== 'GET' || new URL(r.url).origin !== location.origin) return;  // iTunes calls bypass the cache
   e.respondWith(caches.open(V).then(async c => {
     const hit = await c.match(r, { ignoreSearch: true });
-    const net = fetch(r).then(res => { if (res.ok) c.put(r, res.clone()); return res; }).catch(() => hit);
-    return hit || net;
+    const net = fetch(r.url, { cache: 'no-cache' }).then(async res => {
+      if (res.ok) {
+        const changed = hit && tag(hit) !== tag(res);
+        await c.put(r, res.clone());
+        if (changed) notify();
+      }
+      return res;
+    }).catch(() => hit);
+    if (hit) { e.waitUntil(net); return hit; }  // instant from cache, refresh in the background
+    return net;
   }));
 });

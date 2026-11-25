@@ -942,7 +942,20 @@ $('#importFile').addEventListener('change', async e => {
 });
 load().then(() => autoCheck()).then(ran => { if (ran) return load(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) autoCheck().then(ran => ran && load()); });
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloadTimer;
+  const scheduleReload = () => {  // debounce, and never reload in the middle of a check
+    clearTimeout(reloadTimer);
+    const go = () => $('#checkBtn').disabled ? (reloadTimer = setTimeout(go, 3000)) : location.reload();
+    reloadTimer = setTimeout(go, 1500);
+  };
+  navigator.serviceWorker.addEventListener('message', e => { if (e.data === 'updated') scheduleReload(); });
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) scheduleReload(); });
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+  });
+}
 </script>
 </body>
 </html>
