@@ -140,11 +140,23 @@ a.hist-title:hover{color:var(--accent)}
 .row:has(.row-link):active{background:color-mix(in srgb,var(--accent) 8%,transparent)}
 .filter-bar{margin:0 0 .8rem}
 .badge[hidden]{display:none}
+header{flex-wrap:nowrap;align-items:center;gap:.8rem;margin-bottom:.9rem}
+h1{font-size:clamp(1.6rem,7vw,2.2rem)}
+.sub{font-size:.9rem;margin:.3rem 0 0}
+#checkBtn{flex-shrink:0;white-space:nowrap}
+.status{margin:0 0 .8rem}
+.status:empty{min-height:0;margin:0}
+.updated{font-size:.8rem;margin-top:.1rem}
+.day small{display:block;margin-top:.2rem;font-size:.62rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.pill{display:inline-block;margin-left:.1rem;padding:.02rem .45rem;border:1px solid currentColor;border-radius:99px;font-size:.7rem;font-weight:600;vertical-align:1px}
+.pill-album{color:var(--accent)}.pill-ep{color:#9B6BFF}.pill-single{color:#1FA38A}.pill-feature{color:#E0662B}.pill-live{color:#D6457A}
+.row .title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ptr{position:fixed;top:env(safe-area-inset-top,0px);left:0;right:0;z-index:30;padding:.6rem;text-align:center;font-size:.85rem;color:var(--muted);background:var(--bg);transform:translateY(-100%);transition:transform .2s;pointer-events:none}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header><div><h1>Artist Tracker</h1><p class="sub" id="count">Loading…</p></div></header>
+  <header><div><h1>Artist Tracker</h1><p class="sub" id="count">Loading…</p><p class="sub updated" id="updated"></p></div><button class="btn primary" id="checkBtn" type="button" aria-label="Check for new releases">↻ Check</button></header>
   <nav class="tabs" aria-label="Main navigation" role="tablist">
     <button class="tab active" id="trackerTab" type="button" role="tab" aria-selected="true" aria-controls="trackerPanel">Releases</button>
     <button class="tab" id="upcomingTab" type="button" role="tab" aria-selected="false" aria-controls="upcomingPanel">Upcoming</button>
@@ -153,7 +165,7 @@ a.hist-title:hover{color:var(--accent)}
   <p class="status" id="status" role="status" aria-live="polite"></p>
 
   <section id="trackerPanel" class="tab-panel" role="tabpanel" aria-labelledby="trackerTab">
-    <div class="panel-heading"><h2>Latest Releases</h2><button class="btn primary" id="checkBtn" type="button">Check for new releases</button></div>
+    
     <div class="filter-bar"><button class="btn" id="filterBtn" type="button" aria-expanded="false" aria-controls="filterPanel">Filters<span class="badge" id="filterCount" hidden></span></button></div>
     <div id="filterPanel" hidden>
     <div class="period-controls" aria-label="Release period">
@@ -340,7 +352,7 @@ function load() {
           if (pass.includes(r.category) && !artworkByArtist.has(id)) artworkByArtist.set(id, r.artwork_url);
         }
       populatePeriodControls();
-      renderAll();
+      renderAll(); refreshUpdated();
       if (!loaded) { loaded = true; routeFromHash(); }  // open a profile link like #artist/123
     })
     .catch(e => status('Could not load your data: ' + e.message, true));
@@ -399,6 +411,29 @@ function visible() {
   ).sort(byDayThenFavorite);
 }
 
+// "(feat. X)" leaves the title; guests show on the gray line instead.
+const FEAT_RX = /\s*[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s+([^\)\]]+)[\)\]]/gi;
+function splitTitle(r) {
+  const clean = cleanName(r.name || ''), m = [...clean.matchAll(FEAT_RX)];
+  return { title: m.length ? clean.replace(FEAT_RX, '').trim() || clean : clean, guests: m.length ? m[0][1].trim() : '' };
+}
+function metaLine(r) {
+  const t = typeOf(r), m = el('div', 'meta'), cr = r.credited_artist || '', bits = [];
+  m.append(artistLink(r.artist_id, r.artist_name), ' ', el('span', 'pill pill-' + t, CAT_LABEL[t] || 'Album'));
+  if (r.is_feature) { if (cr && cr !== r.artist_name) bits.push('on ' + cr); }
+  else if (splitTitle(r).guests) bits.push('feat. ' + splitTitle(r).guests);
+  if (r.track_count > 1) bits.push(r.track_count + ' tracks');
+  if (bits.length) m.append(' · ' + bits.join(' · '));
+  return m;
+}
+function dayCell(r) {
+  const d = el('div', 'day', r.release_date ? String(parseInt(r.release_date.slice(8, 10), 10)) : '–');
+  if (isoDate(r.release_date)) {
+    const [y, mo, da] = r.release_date.split('-').map(Number);
+    d.append(el('small', null, new Date(y, mo - 1, da).toLocaleDateString('en-US', { weekday: 'short' })));
+  }
+  return d;
+}
 function renderFeed() {
   const feed = $('#feed'); feed.replaceChildren();
   updateFilterBadge();
@@ -419,7 +454,7 @@ function renderFeed() {
     ? artists.filter(a => favoriteArtistIds.has(String(a.artist_id))).length
     : artists.length;
   const trackedLabel = artistFilter === 'favorites' ? 'favorite artist' : 'followed artist';
-  $('#count').textContent = `${total} releases shown from ${trackedCount} ${trackedLabel}${trackedCount === 1 ? '' : 's'} (${releases.length} total stored releases)`;
+  $('#count').textContent = `${total.toLocaleString()} releases · ${trackedCount} ${artistFilter === 'favorites' ? 'favorite' : 'followed'} artist${trackedCount === 1 ? '' : 's'}`;
   if (!total) {
     const message = !artists.length
       ? 'Search for an artist and follow them to start your feed.'
@@ -432,18 +467,16 @@ function renderFeed() {
 
   const addRow = r => {
     const row = el('article', 'row');
-    row.append(el('div', 'day', r.release_date ? String(parseInt(r.release_date.slice(8, 10), 10)) : '–'));
+    row.append(dayCell(r));
     const img = el('img', 'art'); img.alt = ''; img.loading = 'lazy'; img.width = 64; img.height = 64;
     if (r.artwork_url) img.src = r.artwork_url;
     img.onerror = () => img.removeAttribute('src');
     row.append(img);
-    const info = el('div'); const t = el('div', 'title', cleanName(r.name || ''));
+    const info = el('div'); const t = el('div', 'title', splitTitle(r).title);
     if (r.explicit === 'explicit') t.append(explicitTag());
     if (r.is_new) t.append(el('span', 'badge new', 'New'));
     if (isFavorite(r)) t.append(el('span', 'badge fav', '★ Favorite'));
-    const cr = r.credited_artist || '';
-    const rest = r.is_feature ? ', Feature' + (cr && cr !== r.artist_name ? ` on ${cr}` : '') : `, ${LABEL[r.category] || r.kind || 'Album'}`;
-    const meta = el('div', 'meta'); meta.append(artistLink(r.artist_id, r.artist_name), rest + trackSuffix(r));
+    const meta = metaLine(r);
     info.append(t, meta);
     row.append(info);
     if (r.url && r.url.startsWith('https://')) {
@@ -511,7 +544,7 @@ function renderUpcoming() {
         .toLocaleString('en-US', { month: 'long', year: 'numeric' })));
     }
     const row = el('article', 'row upcoming');
-    row.append(el('div', 'day', String(parseInt(r.release_date.slice(8, 10), 10))));
+    row.append(dayCell(r));
     const img = el('img', 'art'); img.alt = ''; img.loading = 'lazy'; img.width = 64; img.height = 64;
     if (r.artwork_url) img.src = r.artwork_url;
     img.onerror = () => img.removeAttribute('src');
@@ -519,14 +552,10 @@ function renderUpcoming() {
 
     const n = daysUntil(r.release_date);
     const info = el('div');
-    const t = el('div', 'title', cleanName(r.name || ''));
+    const t = el('div', 'title', splitTitle(r).title);
     if (r.explicit === 'explicit') t.append(explicitTag());
     if (isFavorite(r)) t.append(el('span', 'badge fav', '★ Favorite'));
-    const cr = r.credited_artist || '';
-    const label = r.is_feature
-      ? 'Feature' + (cr && cr !== r.artist_name ? ` on ${cr}` : '')
-      : (LABEL[r.category] || r.kind || 'Album');
-    const meta = el('div', 'meta'); meta.append(artistLink(r.artist_id, r.artist_name), `, ${label}${trackSuffix(r)} · `);
+    const meta = metaLine(r); meta.append(' · ');
     meta.append(el('span', 'countdown', n === 1 ? 'Tomorrow' : `In ${n} days`));
     info.append(t, meta);
     row.append(info);
@@ -910,6 +939,30 @@ $('#checkBtn').addEventListener('click', async e => {
   catch (err) { status('Check failed: ' + err.message, true); }
   b.disabled = false;
 });
+async function refreshUpdated() {
+  let t = 0; try { t = Number(await DB.getMeta('last_check') || 0); } catch {}
+  const m = Math.floor((Date.now() - t) / 60000);
+  $('#updated').textContent = !t ? 'Not checked yet' : m < 1 ? 'Updated just now' : m < 60 ? `Updated ${m}m ago`
+    : m < 1440 ? `Updated ${Math.floor(m / 60)}h ago` : `Updated ${Math.floor(m / 1440)}d ago`;
+}
+setInterval(refreshUpdated, 60000);
+(function pullToRefresh() {
+  const bar = el('div', 'ptr', '↓ Pull to check for new releases'); document.body.append(bar);
+  let y0 = null, dy = 0;
+  addEventListener('touchstart', e => { y0 = (window.scrollY <= 0 && e.touches.length === 1) ? e.touches[0].clientY : null; dy = 0; }, { passive: true });
+  addEventListener('touchmove', e => {
+    if (y0 === null) return;
+    dy = Math.max(0, e.touches[0].clientY - y0);
+    bar.style.transition = 'none';
+    bar.style.transform = `translateY(calc(-100% + ${Math.min(dy / 2, 60)}px))`;
+    bar.textContent = dy > 110 ? '↑ Release to check' : '↓ Pull to check for new releases';
+  }, { passive: true });
+  addEventListener('touchend', () => {
+    const go = y0 !== null && dy > 110;
+    bar.style.transition = ''; bar.style.transform = ''; y0 = null; dy = 0;
+    if (go && !$('#checkBtn').disabled) $('#checkBtn').click();
+  });
+})();
 $('#exportBtn').addEventListener('click', async () => {
   const data = { app: 'artist-tracker', version: 1, exported: new Date().toISOString(),
     artists: artists.map(a => ({ artist_id: a.artist_id, name: a.name, url: a.url })), favorites: [...favoriteArtistIds] };
