@@ -52,10 +52,10 @@ li small{display:block;color:var(--muted)}
 .status{min-height:1.4rem;color:var(--muted);font-size:.9rem;margin:0 0 1rem}
 .status.err{color:var(--err)}
 .empty{color:var(--muted);padding:1rem 0}
-.period-controls{display:flex;flex-wrap:wrap;align-items:end;gap:.7rem;margin:0 0 1rem}
-.period-field{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;color:var(--muted)}
+.period-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.7rem;max-width:520px;margin:0 0 1rem}
+.period-field{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;color:var(--muted);white-space:nowrap}
 .period-field[hidden]{display:none}
-.period-field select{min-width:145px}
+.period-field select{width:100%;min-width:0}
 .filters{border:0;padding:0;margin:0 0 1.2rem;display:flex;flex-wrap:wrap;gap:.5rem}
 .filters label{display:flex;align-items:center;gap:.4rem;border:1px solid var(--line);border-radius:99px;padding:.25rem .8rem;font-size:.9rem;cursor:pointer}
 .filters label:has(input:checked){border-color:var(--accent);color:var(--accent)}
@@ -145,12 +145,9 @@ a.hist-title:hover{color:var(--accent)}
     <div class="panel-heading"><h2>Latest Releases</h2><button class="btn primary" id="checkBtn" type="button">Check for new releases</button></div>
     <div class="period-controls" aria-label="Release period">
       <label class="period-field" for="artistFilter">Artists
-        <select id="artistFilter"><option value="all" selected>All Artists</option><option value="favorites">Favorites Only</option></select>
+        <select id="artistFilter"><option value="all" selected>All</option><option value="favorites">Favorites</option></select>
       </label>
-      <label class="period-field" for="periodSelect">Release period
-        <select id="periodSelect"><option value="recent" selected>Most Recent</option><option value="decade">Decade</option></select>
-      </label>
-      <label class="period-field" id="decadeField" for="decadeSelect" hidden>Decade<select id="decadeSelect"></select></label>
+      <label class="period-field" for="periodSelect">Period<select id="periodSelect"></select></label>
       <label class="period-field" id="yearField" for="yearSelect" hidden>Year<select id="yearSelect"></select></label>
     </div>
     <fieldset class="filters" aria-label="Release types">
@@ -159,7 +156,6 @@ a.hist-title:hover{color:var(--accent)}
       <label><input type="checkbox" value="single" checked> Singles <span class="n" data-n="single"></span></label>
       <label><input type="checkbox" value="feature" checked> Features <span class="n" data-n="feature"></span></label>
       <label><input type="checkbox" value="live" checked> Live <span class="n" data-n="live"></span></label>
-      <label><input type="checkbox" value="compilation" checked> Compilations <span class="n" data-n="compilation"></span></label>
     </fieldset>
     <div id="feed"></div>
   </section>
@@ -259,24 +255,12 @@ function availableDecades() {
     .sort((a, b) => b - a);
 }
 function populatePeriodControls() {
-  const decades = availableDecades();
-  const decadeSelect = $('#decadeSelect');
-  const previousDecade = selectedDecade;
-  decadeSelect.replaceChildren();
-  for (const decade of decades) {
-    const option = document.createElement('option');
-    option.value = String(decade);
-    option.textContent = `${decade}s`;
-    decadeSelect.append(option);
-  }
-  if (decades.length) {
-    selectedDecade = decades.includes(Number(previousDecade)) ? previousDecade : String(decades[0]);
-    decadeSelect.value = selectedDecade;
-  } else {
-    selectedDecade = '';
-  }
+  const decades = availableDecades(), sel = $('#periodSelect');
+  sel.replaceChildren(new Option('Most Recent', 'recent'));
+  for (const d of decades) sel.append(new Option(`${d}s`, String(d)));
+  if (selectedPeriod === 'decade' && !decades.includes(Number(selectedDecade))) selectedPeriod = 'recent';
+  sel.value = selectedPeriod === 'recent' ? 'recent' : selectedDecade;
   populateYearOptions();
-  $('#periodSelect').value = selectedPeriod;
   updatePeriodVisibility();
 }
 function populateYearOptions() {
@@ -298,10 +282,7 @@ function populateYearOptions() {
   yearSelect.value = selectedYear;
 }
 function updatePeriodVisibility() {
-  const isDecade = selectedPeriod === 'decade';
-  $('#decadeField').hidden = !isDecade;
-  $('#yearField').hidden = !isDecade;
-  $('#decadeSelect').disabled = !availableDecades().length;
+  $('#yearField').hidden = selectedPeriod !== 'decade';
   $('#yearSelect').disabled = !availableYears().some(y => Math.floor(y / 10) * 10 === Number(selectedDecade));
 }
 
@@ -328,7 +309,10 @@ const trackSuffix = r => r.track_count > 1 ? ` · ${r.track_count} tracks` : '';
 function explicitTag() {
   const e = el('span', 'explicit', 'E'); e.title = 'Explicit'; e.setAttribute('aria-label', 'Explicit'); return e;
 }
-const typeOf = r => r.category || (r.is_feature ? 'feature' : (r.kind || 'Album').toLowerCase());
+const typeOf = r => {
+  const t = r.category || (r.is_feature ? 'feature' : (r.kind || 'Album').toLowerCase());
+  return t === 'compilation' ? 'album' : t;  // no separate Compilations filter
+};
 
 // Shared rule so the counts, the feed, and the Upcoming tab agree on "favorites only".
 function inArtistScope(r) {
@@ -834,14 +818,9 @@ $('#artistQuery').addEventListener('keydown', e => {
 });
 $('#moreArtists').addEventListener('click', () => { artistsShown += ARTIST_PAGE; renderFollowing(); });
 $('#periodSelect').addEventListener('change', e => {
-  selectedPeriod = e.target.value;
-  if (selectedPeriod === 'decade') selectedYear = 'all';
-  shown = 40;
-  updatePeriodVisibility();
-  renderFeed();
-});
-$('#decadeSelect').addEventListener('change', e => {
-  selectedDecade = e.target.value;
+  const v = e.target.value;
+  selectedPeriod = v === 'recent' ? 'recent' : 'decade';
+  if (selectedPeriod === 'decade') selectedDecade = v;
   selectedYear = 'all';
   populateYearOptions();
   shown = 40;
