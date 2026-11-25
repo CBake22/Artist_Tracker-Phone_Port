@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Release Tracker</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -129,20 +129,33 @@ a.hist-title:hover{color:var(--accent)}
 #feed .link,#upcomingFeed .link{grid-column:3}
 @media (max-width:560px){#feed,#upcomingFeed{grid-template-columns:minmax(0,1fr)}#feed .row,#upcomingFeed .row{grid-template-columns:2.4rem 56px minmax(0,1fr)}}
 @media (max-width:560px){.artist-list{grid-template-columns:minmax(0,1fr)}.row{grid-template-columns:2.4rem 56px 1fr;gap:.7rem}.art{width:56px;height:56px}.link{grid-column:3}.period-field{flex:1}.period-field select{min-width:0;width:100%}.panel-heading{align-items:flex-start}.artist-avatar{width:46px;height:46px;flex-basis:46px}}
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;margin:0;gap:0;background:var(--card);border-bottom:0;border-top:1px solid var(--line);padding:0 0 env(safe-area-inset-bottom,0px)}
+.tab{flex:1;margin:0;padding:.9rem .5rem;border-bottom:0;border-top:3px solid transparent;text-align:center}
+.tab.active{border-bottom-color:transparent;border-top-color:var(--accent)}
+.wrap{padding-bottom:calc(6rem + env(safe-area-inset-bottom,0px))}
+.month{position:sticky;top:0;z-index:2;background:var(--bg);margin:1rem 0 0;padding:.55rem 0 .3rem}
+.row{position:relative}
+.row-link{position:absolute;inset:0;z-index:0}
+.row .name-link{position:relative;z-index:1}
+.row:has(.row-link):active{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.filter-bar{margin:0 0 .8rem}
+.badge[hidden]{display:none}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header><div><h1>Artist Tracker</h1><p class="sub" id="count">Loading…</p></div></header>
   <nav class="tabs" aria-label="Main navigation" role="tablist">
-    <button class="tab active" id="trackerTab" type="button" role="tab" aria-selected="true" aria-controls="trackerPanel">Artist Tracker</button>
+    <button class="tab active" id="trackerTab" type="button" role="tab" aria-selected="true" aria-controls="trackerPanel">Releases</button>
     <button class="tab" id="upcomingTab" type="button" role="tab" aria-selected="false" aria-controls="upcomingPanel">Upcoming</button>
-    <button class="tab" id="artistsTab" type="button" role="tab" aria-selected="false" aria-controls="artistsPanel">Artist Menu</button>
+    <button class="tab" id="artistsTab" type="button" role="tab" aria-selected="false" aria-controls="artistsPanel">Artists</button>
   </nav>
   <p class="status" id="status" role="status" aria-live="polite"></p>
 
   <section id="trackerPanel" class="tab-panel" role="tabpanel" aria-labelledby="trackerTab">
     <div class="panel-heading"><h2>Latest Releases</h2><button class="btn primary" id="checkBtn" type="button">Check for new releases</button></div>
+    <div class="filter-bar"><button class="btn" id="filterBtn" type="button" aria-expanded="false" aria-controls="filterPanel">Filters<span class="badge" id="filterCount" hidden></span></button></div>
+    <div id="filterPanel" hidden>
     <div class="period-controls" aria-label="Release period">
       <label class="period-field" for="artistFilter">Artists
         <select id="artistFilter"><option value="all" selected>All</option><option value="favorites">Favorites</option></select>
@@ -157,6 +170,7 @@ a.hist-title:hover{color:var(--accent)}
       <label><input type="checkbox" value="feature" checked> Features <span class="n" data-n="feature"></span></label>
       <label><input type="checkbox" value="live" checked> Live <span class="n" data-n="live"></span></label>
     </fieldset>
+    </div>
     <div id="feed"></div>
   </section>
 
@@ -197,6 +211,9 @@ a.hist-title:hover{color:var(--accent)}
         <ul id="following" class="artist-list"></ul>
         <button class="btn more-btn" id="moreArtists" type="button" hidden>Show more</button>
       </section>
+      <section class="artist-library"><h2>Backup</h2><p class="panel-sub">Save your followed artists and favorites to a file, or restore them after a reset.</p>
+        <div class="artist-tools"><button class="btn" id="exportBtn" type="button">Export backup</button><button class="btn" id="importBtn" type="button">Import backup</button><input type="file" id="importFile" accept="application/json,.json" hidden></div>
+      </section>
     </div>
   </section>
 </div>
@@ -218,6 +235,27 @@ let loaded = false, currentTab = 'tracker', lastTab = 'tracker', openedFromApp =
 let profileArtist = null;
 const fold = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 let selectedPeriod = 'recent', selectedDecade = '', selectedYear = 'all';
+const FILTERS_KEY = 'artistTracker.filters';
+function saveFilters() {
+  try {
+    localStorage.setItem(FILTERS_KEY, JSON.stringify({ artistFilter, selectedPeriod, selectedDecade, selectedYear, upcomingScope,
+      types: [...document.querySelectorAll('.filters input:checked')].map(i => i.value) }));
+  } catch {}
+}
+(function restoreFilters() {
+  try {
+    const f = JSON.parse(localStorage.getItem(FILTERS_KEY) || 'null'); if (!f) return;
+    artistFilter = f.artistFilter || 'all'; selectedPeriod = f.selectedPeriod || 'recent';
+    selectedDecade = f.selectedDecade || ''; selectedYear = f.selectedYear || 'all'; upcomingScope = f.upcomingScope || 'all';
+    $('#artistFilter').value = artistFilter; $('#upcomingScope').value = upcomingScope;
+    if (Array.isArray(f.types)) document.querySelectorAll('.filters input').forEach(i => { i.checked = f.types.includes(i.value); });
+  } catch {}
+})();
+function updateFilterBadge() {
+  const n = (artistFilter !== 'all') + (selectedPeriod !== 'recent') + document.querySelectorAll('.filters input:not(:checked)').length;
+  const b = $('#filterCount'); b.textContent = n || ''; b.hidden = !n;
+  saveFilters();
+}
 
 function loadFavoriteIds() {
   try {
@@ -363,6 +401,7 @@ function visible() {
 
 function renderFeed() {
   const feed = $('#feed'); feed.replaceChildren();
+  updateFilterBadge();
   const today = new Date().toLocaleDateString('en-CA');
   const weekAgoDate = new Date(); weekAgoDate.setDate(weekAgoDate.getDate() - 7);
   const weekAgo = weekAgoDate.toLocaleDateString('en-CA');
@@ -408,14 +447,16 @@ function renderFeed() {
     info.append(t, meta);
     row.append(info);
     if (r.url && r.url.startsWith('https://')) {
-      const a = el('a', 'link', 'Open in Apple Music'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; row.append(a);
+      const a = el('a', 'row-link'); a.setAttribute('aria-label', 'Open ' + cleanName(r.name || '') + ' in Apple Music'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; row.append(a);
     }
     feed.append(row);
   };
 
-  if (recentWeek.length) {
-    feed.append(el('h2', 'month', 'Past week'));
-    for (const r of recentWeek) addRow(r);
+  let grp = null;
+  for (const r of recentWeek) {
+    const n = -daysUntil(r.release_date), g = n <= 0 ? 'Today' : n === 1 ? 'Yesterday' : 'This week';
+    if (g !== grp) { grp = g; feed.append(el('h2', 'month', g)); }
+    addRow(r);
   }
   let month = null;
   for (const r of list.slice(0, shown)) {
@@ -490,7 +531,7 @@ function renderUpcoming() {
     info.append(t, meta);
     row.append(info);
     if (r.url && r.url.startsWith('https://')) {
-      const a = el('a', 'link', 'Open in Apple Music'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; row.append(a);
+      const a = el('a', 'row-link'); a.setAttribute('aria-label', 'Open ' + cleanName(r.name || '') + ' in Apple Music'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; row.append(a);
     }
     feed.append(row);
   }
@@ -794,7 +835,8 @@ $('#profileBack').addEventListener('click', () => {
   else { clearArtistHash(); selectTab(lastTab); }
 });
 window.addEventListener('hashchange', () => { if (loaded) routeFromHash(); });
-$('#upcomingScope').addEventListener('change', e => { upcomingScope = e.target.value; renderUpcoming(); });
+$('#upcomingScope').addEventListener('change', e => { upcomingScope = e.target.value; saveFilters(); renderUpcoming(); });
+$('#filterBtn').addEventListener('click', () => { const p = $('#filterPanel'); p.hidden = !p.hidden; $('#filterBtn').setAttribute('aria-expanded', String(!p.hidden)); });
 $('#artistFilter').addEventListener('change', e => {
   artistFilter = e.target.value;
   shown = 40;
@@ -867,6 +909,36 @@ $('#checkBtn').addEventListener('click', async e => {
   try { await api('/check-now', { method: 'POST' }); await load(); status('Check finished.'); }
   catch (err) { status('Check failed: ' + err.message, true); }
   b.disabled = false;
+});
+$('#exportBtn').addEventListener('click', async () => {
+  const data = { app: 'artist-tracker', version: 1, exported: new Date().toISOString(),
+    artists: artists.map(a => ({ artist_id: a.artist_id, name: a.name, url: a.url })), favorites: [...favoriteArtistIds] };
+  const file = new File([JSON.stringify(data, null, 2)], `artist-tracker-backup-${new Date().toLocaleDateString('en-CA')}.json`, { type: 'application/json' });
+  try {
+    if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file] });  // iOS share sheet -> Save to Files
+    else { const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
+    status(`Exported ${artists.length} artists.`);
+  } catch (e) { if (e.name !== 'AbortError') status('Export failed: ' + e.message, true); }
+});
+$('#importBtn').addEventListener('click', () => $('#importFile').click());
+$('#importFile').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    const d = JSON.parse(await f.text());
+    if (!Array.isArray(d.artists)) throw new Error('not a backup file');
+    const have = new Set(artists.map(a => Number(a.artist_id)));
+    const todo = d.artists.filter(a => !have.has(Number(a.artist_id)));
+    let done = 0, failed = 0;
+    for (const a of todo) {
+      status(`Restoring ${done + failed + 1} of ${todo.length}: ${a.name}…`);
+      try { await api(`/artists/${a.artist_id}/follow`, { method: 'POST' }); done++; } catch { failed++; }
+      await new Promise(r => setTimeout(r, 300));
+    }
+    for (const id of d.favorites || []) favoriteArtistIds.add(String(id));
+    saveFavoriteIds();
+    await load();
+    status(`Restored ${done} artist${done === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}.`, failed > 0);
+  } catch (err) { status('Import failed: ' + err.message, true); }
 });
 load().then(() => autoCheck()).then(ran => { if (ran) return load(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) autoCheck().then(ran => ran && load()); });

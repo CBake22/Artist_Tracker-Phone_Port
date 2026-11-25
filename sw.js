@@ -1,6 +1,6 @@
 // Offline app shell: serve cached files instantly, refresh them in the background.
 // Bump V when you deploy changes so old caches are dropped.
-const V = 'tracker-v3';
+const V = 'tracker-v4';
 const SHELL = ['./', 'index.html', 'classify.js', 'store.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => e.waitUntil(
   caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));
