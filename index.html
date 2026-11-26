@@ -543,7 +543,24 @@ function creditedArtistNames(r) {
   const uniquePrimary = [...new Map(primary.filter(n => !guestKeys.has(Classify.norm(n)))
     .map(name => [Classify.norm(name), name])).values()];
   const uniqueGuests = [...new Map(guests.map(name => [Classify.norm(name), name])).values()];
-  return { primary: uniquePrimary.length ? uniquePrimary : (guests.length ? [] : [r.artist_name || r.credited_artist || 'Unknown artist']), guests: uniqueGuests };
+
+  // artist_ids is the database's authoritative list of followed artists attached
+  // to this release. Fall back to those exact artist records when Apple's combined
+  // credit string cannot be split into individual followed artists.
+  const represented = new Set([...uniquePrimary, ...uniqueGuests].map(Classify.norm));
+  const missingOwners = releaseArtistNames(r)
+    .filter(a => !represented.has(Classify.norm(a.name)))
+    .map(a => a.name);
+  const primaryIsFollowed = uniquePrimary.some(name =>
+    artists.some(a => Classify.norm(a.name) === Classify.norm(name)));
+  const resolvedPrimary = primaryIsFollowed ? uniquePrimary : [];
+  const primaryWithOwners = [...resolvedPrimary, ...missingOwners];
+
+  return {
+    primary: primaryWithOwners.length ? primaryWithOwners :
+      (guests.length ? [] : [r.artist_name || r.credited_artist || 'Unknown artist']),
+    guests: uniqueGuests
+  };
 }
 
 // Newest day first (undated last); within the same day, favorite artists first.
