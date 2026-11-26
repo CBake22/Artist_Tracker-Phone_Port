@@ -50,10 +50,9 @@ async function get(path, params) {
   throw new Error('Apple Music request failed: ' + (last?.message || 'unknown error'));
 }
 const FEATURE_CREDIT_RX = /[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s+([^\)\]]+)[\)\]]/gi;
-function featuredCredits(title) {
+function featuredCredits(title, followedNames = []) {
   const matches = [...String(title || '').matchAll(FEATURE_CREDIT_RX)];
-  const raw = matches.flatMap(m => String(m[1]).split(/\s*(?:,|&|\band\b)\s*/i))
-    .map(x => x.trim()).filter(Boolean);
+  const raw = matches.flatMap(m => Classify.splitCredits(m[1], followedNames));
   return [...new Map(raw.map(name => [Classify.norm(name), name])).values()];
 }
 async function searchArtists(term, limit = 10) {
@@ -61,14 +60,14 @@ async function searchArtists(term, limit = 10) {
   return (d.results || []).filter(a => a.artistId && a.artistName).map(a => ({
     artist_id: a.artistId, name: a.artistName, url: a.artistLinkUrl, genre: a.primaryGenreName }));
 }
-function parseRelease(x, followed, artistId) {
+function parseRelease(x, followed, artistId, followedNames = []) {
   const cid = parseInt(x.collectionId, 10), name = String(x.collectionName ?? '').trim();
   if (!cid || !name) return null;
   const date = String(x.releaseDate || '').slice(0, 10), url = x.collectionViewUrl || '';
   const credited = String(x.artistName || '');
   return {
     collection_id: cid, name, primary_artist_credit: credited, primary_artists: credited ? [credited] : [],
-    featured_artists: featuredCredits(name),
+    featured_artists: featuredCredits(name, followedNames),
     release_date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '',
     url: url.startsWith('https://') ? url : null,
     artwork_url: String(x.artworkUrl100 || '').replace('100x100', '600x600'),
@@ -79,13 +78,14 @@ function parseRelease(x, followed, artistId) {
   };
 }
 async function lookupArtist(id, limit = 200) {
+  const followedNames = (await DB.artists()).map(a => a.name);
   const results = (await get('/lookup', { id, entity: 'album', sort: 'recent', limit })).results || [];
   const a = results.find(x => x.wrapperType === 'artist');
   if (!a || !a.artistId || !a.artistName) return null;
   const releases = []; let skipped = 0;
   for (const x of results) {
     if (x.wrapperType !== 'collection') continue;
-    const r = parseRelease(x, a.artistName, a.artistId);
+    const r = parseRelease(x, a.artistName, a.artistId, [...followedNames, a.artistName]);
     r ? releases.push(r) : skipped++;
   }
   releases.sort((p, q) => q.release_date.localeCompare(p.release_date));
@@ -121,9 +121,16 @@ const dbp = new Promise((res, rej) => {
   q.onerror = () => rej(q.error);
 });
 const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
-const creditedOwnerIds = (credited, arts) => {
-  const hay = ' ' + Classify.norm(credited) + ' ';
-  return arts.filter(a => { const name = Classify.norm(a.name); return name && hay.includes(' ' + name + ' '); }).map(a => Number(a.artist_id));
+const ownerIds = row => {
+  const ids = Array.isArray(row?.artist_ids) && row.artist_ids.length ? row.artist_ids : [row?.artist_id];
+  return [...new Set(ids.map(Number).filter(x => Number.isSafeInteger(x) && x > 0))];
+};
+const creditedOwnerIds = (credits, arts) => {
+  const knownNames = arts.map(a => a.name);
+  const parsed = (Array.isArray(credits) ? credits : [credits])
+    .flatMap(credit => Classify.splitCredits(credit, knownNames));
+  const credited = new Set(parsed.map(Classify.norm).filter(Boolean));
+  return arts.filter(a => credited.has(Classify.norm(a.name))).map(a => Number(a.artist_id));
 };
 async function tx(stores, mode, fn) {
   const t = (await dbp).transaction(stores, mode);
@@ -137,11 +144,14 @@ const DB = {
     .then(a => a.sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }))),
   allReleases: () => tx('releases', 'readonly', s => req(s.getAll())),
   artistReleases: id => tx('releases', 'readonly', s => req(s.index('artist_ids').getAll(id))),
-  addArtist: a => tx('artists', 'readwrite', async s => { if (!await req(s.get(a.artist_id))) s.put(a); }),
+  addArtist: async a => {
+    await tx('artists', 'readwrite', async s => { if (!await req(s.get(a.artist_id))) s.put(a); });
+    await DB.reclassify(true);
+  },
   removeArtist: id => tx(['releases', 'artists'], 'readwrite', async (r, a) => {
     const rows = await req(r.index('artist_ids').getAll(id));
     for (const row of rows) {
-      const owners = (Array.isArray(row.artist_ids) ? row.artist_ids : [row.artist_id]).filter(x => Number(x) !== Number(id));
+      const owners = ownerIds(row).filter(x => x !== Number(id));
       if (!owners.length) r.delete(row.collection_id);
       else r.put({ ...row, artist_ids: owners, artist_id: owners[0] });
     }
@@ -152,8 +162,8 @@ const DB = {
     const followed = await req(a.getAll());
     for (const r of list) {
       const old = await req(s.get(r.collection_id));
-      const owners = new Set([...(old?.artist_ids || (old ? [old.artist_id] : [])), id,
-        ...creditedOwnerIds([r.credited_artist, ...(r.featured_artists || [])].filter(Boolean).join(' '), followed)].map(Number));
+      const owners = new Set([...ownerIds(old), Number(id),
+        ...creditedOwnerIds([r.credited_artist, ...(r.featured_artists || [])].filter(Boolean), followed)].filter(Number.isSafeInteger));
       s.put({ ...old, ...r, artist_id: old?.artist_id ?? id, artist_ids: [...owners],
               detected: old ? old.detected : (r.detected || 0),
               first_seen_at: old ? old.first_seen_at : Date.now() });
@@ -162,44 +172,56 @@ const DB = {
   exportData: () => tx(['artists', 'releases', 'meta'], 'readonly', async (a, r, m) => ({
     artists: await req(a.getAll()), releases: await req(r.getAll()), meta: await req(m.getAll())
   })),
-  restoreData: data => tx(['artists', 'releases', 'meta'], 'readwrite', async (a, r, m) => {
+  restoreData: async data => {
+    const result = await tx(['artists', 'releases', 'meta'], 'readwrite', async (a, r, m) => {
     for (const artist of data.artists || []) {
       const id = Number(artist.artist_id);
-      if (!Number.isFinite(id) || !artist.name) continue;
+      if (!Number.isSafeInteger(id) || id <= 0 || typeof artist.name !== 'string' || !artist.name.trim()) continue;
       const old = await req(a.get(id));
       a.put({ ...old, ...artist, artist_id: id });
     }
     for (const release of data.releases || []) {
       const id = Number(release.collection_id);
-      if (!Number.isFinite(id) || !release.name) continue;
+      if (!Number.isSafeInteger(id) || id <= 0 || typeof release.name !== 'string' || !release.name.trim()) continue;
       const old = await req(r.get(id));
-      const owners = new Set([...(old?.artist_ids || (old ? [old.artist_id] : [])),
-        ...(release.artist_ids || (release.artist_id != null ? [release.artist_id] : []))].map(Number).filter(Number.isFinite));
-      const merged = { ...release, ...old, ...release, collection_id: id,
-        artist_ids: [...owners], artist_id: old?.artist_id ?? release.artist_id ?? [...owners][0],
+      const incomingOwners = Array.isArray(release.artist_ids) && release.artist_ids.length ? release.artist_ids : [release.artist_id];
+      const owners = new Set([...ownerIds(old), ...incomingOwners.map(Number)].filter(x => Number.isSafeInteger(x) && x > 0));
+      const preferred = Number(old?.artist_id ?? release.artist_id);
+      const primaryId = owners.has(preferred) ? preferred : [...owners][0];
+      if (!owners.size || !primaryId) continue;
+      const merged = { ...old, ...release, collection_id: id,
+        artist_ids: [...owners], artist_id: primaryId,
         detected: old ? old.detected : (release.detected || 0),
         first_seen_at: old?.first_seen_at || release.first_seen_at || Date.now() };
       r.put(merged);
     }
-    for (const item of data.meta || []) if (item?.key) m.put(item);
+    for (const item of data.meta || []) if (item?.key && item.key !== 'classifier_version') m.put(item);
+    m.put({ key: 'classifier_version', value: '0' });
     return { artists: (data.artists || []).length, releases: (data.releases || []).length };
-  }),
+    });
+    await DB.reclassify(true);
+    return result;
+  },
   getMeta: k => tx('meta', 'readonly', async s => (await req(s.get(k)))?.value),
   setMeta: (k, v) => tx('meta', 'readwrite', async s => { s.put({ key: k, value: String(v) }); }),
-  reclassify: () => tx(['meta', 'releases', 'artists'], 'readwrite', async (m, r, a) => {
+  reclassify: (force = false) => tx(['meta', 'releases', 'artists'], 'readwrite', async (m, r, a) => {
     const v = await req(m.get('classifier_version'));
-    if (v && v.value === String(Classify.VERSION)) return 0;
+    if (!force && v && v.value === String(Classify.VERSION)) return 0;
     const arts = new Map((await req(a.getAll())).map(x => [x.artist_id, x]));
     const rows = await req(r.getAll());
     const followed = [...arts.values()];
     for (const x of rows) {
       const ar = arts.get(x.artist_id); if (!ar) continue;
-      const owners = new Set([...(x.artist_ids || [x.artist_id]),
-        ...creditedOwnerIds([x.credited_artist || '', ...(x.featured_artists || featuredCredits(x.name))].filter(Boolean).join(' '), followed)].map(Number));
-      r.put({ ...x, ...Classify.classify(x.name, x.credited_artist || '', ar.name, ar.artist_id),
-        primary_artist_credit: x.primary_artist_credit || x.credited_artist || '',
-        primary_artists: x.primary_artists || (x.credited_artist ? [x.credited_artist] : []),
-        featured_artists: x.featured_artists?.length ? x.featured_artists : featuredCredits(x.name),
+      // Rebuild inferred ownership from the primary lookup owner and parsed credits.
+      // This removes false collaborator links created by the old comma-splitting parser.
+      const featured = featuredCredits(x.name, followed.map(a => a.name));
+      const credited = x.primary_artist_credit || x.credited_artist || '';
+      const owners = new Set([Number(x.artist_id),
+        ...creditedOwnerIds([credited, ...featured].filter(Boolean), followed)].filter(Number.isSafeInteger));
+      r.put({ ...x, ...Classify.classify(x.name, credited, ar.name, ar.artist_id),
+        primary_artist_credit: credited,
+        primary_artists: credited ? [credited] : [],
+        featured_artists: featured,
         artist_ids: [...owners] });
     }
     m.put({ key: 'classifier_version', value: String(Classify.VERSION) });
@@ -207,7 +229,7 @@ const DB = {
   }),
 };
 if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});  // ask iOS not to evict
-const ready = DB.reclassify().catch(e => console.error('reclassify failed', e));
+const ready = DB.reclassify();
 
 // ---------- release list (collapses repeat editions) ----------
 async function listReleases() {
@@ -264,6 +286,7 @@ async function checkReleases() {
   const summary = { skipped: false, succeeded: 0, failed: 0, found: 0, errors: [] };
   try {
     const artists = await DB.artists();
+    await DB.setMeta('last_attempt', Date.now());
     let statuses = {};
     try { statuses = JSON.parse(await DB.getMeta('artist_check_status') || '{}'); } catch {}
     for (const a of artists) {
@@ -311,7 +334,7 @@ async function localApi(path, opts = {}) {
   if (p === '/artists' && method === 'GET') return DB.artists();
   if (p === '/releases') return listReleases();
   if (p === '/search') return searchArtists(u.searchParams.get('q') || '');
-  if (p === '/check-now') { await checkReleases(); return { status: 'done' }; }
+  if (p === '/check-now' && method === 'POST') return checkReleases();
   if ((m = p.match(/^\/artists\/(\d+)\/follow$/))) return follow(+m[1]);
   if ((m = p.match(/^\/artists\/(\d+)$/)) && method === 'DELETE') { await DB.removeArtist(+m[1]); return { unfollowed: +m[1] }; }
   throw new Error('Not found');

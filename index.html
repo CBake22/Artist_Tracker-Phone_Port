@@ -355,7 +355,7 @@ function load() {
       artworkByArtist = new Map();
       // Artist picture = cover of their newest released album or EP (no features, no unreleased).
       // Artists with only singles fall back to their newest own single.
-      const todayStr = new Date().toLocaleDateString('en-CA');
+      const todayStr = localDateString();
       const own = releases.filter(r => r.artwork_url && !r.is_feature && !(r.release_date > todayStr));
       for (const pass of [['album', 'ep'], ['single']])
         for (const r of own) {
@@ -372,6 +372,10 @@ function load() {
     .catch(e => status('Could not load your data: ' + e.message, true));
 }
 
+function localDateString(date = new Date()) {
+  const y = date.getFullYear(), m = String(date.getMonth() + 1).padStart(2, '0'), d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
 function cleanName(n) { return (n || '').replace(/\s-\s(single|ep)$/i, ''); }
 const LABEL = { live: 'Live album', compilation: 'Compilation' };
 const trackSuffix = r => r.track_count > 1 ? ` · ${r.track_count} tracks` : '';
@@ -390,30 +394,20 @@ function releaseArtistNames(r) {
   const byId = new Map(artists.map(a => [Number(a.artist_id), a]));
   return releaseArtistIds(r).map(id => byId.get(Number(id))).filter(Boolean);
 }
-// Split collaborative artist strings while avoiding accidental splitting of a
-// solo artist whose official name contains punctuation (e.g. "Earth, Wind & Fire").
-// If any segment matches an artist the user follows, the separators are treated
-// as collaboration delimiters so each followed collaborator can link to a profile.
-function splitArtistCredits(raw, followedByName, explicit = false) {
-  const value = String(raw || '').trim();
-  if (!value) return [];
-  const parts = value.split(/\s*(?:,|&|\band\b)\s*/i).map(x => x.trim()).filter(Boolean);
-  if (explicit || parts.some(name => followedByName.has(Classify.norm(name)))) return parts;
-  return [value];
+function splitArtistCredits(raw) {
+  return Classify.splitCredits(raw, artists.map(a => a.name));
 }
 function creditedArtistNames(r) {
-  const followedByName = new Map(artists.map(a => [Classify.norm(a.name), a]));
-  const primary = splitArtistCredits(r.credited_artist || r.artist_name || '', followedByName, !!splitTitle(r).guests);
-  // Apple sometimes returns only the primary artist in artistName, while guests
-  // are present in collectionName, e.g. "Hell Nah (feat. J. Cole & Anderson .Paak)".
+  const primary = splitArtistCredits(r.primary_artist_credit || r.credited_artist || r.artist_name || '');
+  // Prefer the corrected structured credits; parse older rows from the title.
   const rawGuests = Array.isArray(r.featured_artists) && r.featured_artists.length
-    ? r.featured_artists.join(' & ') : splitTitle(r).guests;
-  const guests = splitArtistCredits(rawGuests, followedByName, true);
+    ? r.featured_artists : splitTitle(r).guests;
+  const guests = rawGuests.flatMap(name => splitArtistCredits(name));
   const guestKeys = new Set(guests.map(Classify.norm));
   const uniquePrimary = [...new Map(primary.filter(n => !guestKeys.has(Classify.norm(n)))
     .map(name => [Classify.norm(name), name])).values()];
   const uniqueGuests = [...new Map(guests.map(name => [Classify.norm(name), name])).values()];
-  return { primary: uniquePrimary.length ? uniquePrimary : (guests.length ? [] : [r.artist_name || 'Unknown artist']), guests: uniqueGuests };
+  return { primary: uniquePrimary.length ? uniquePrimary : (guests.length ? [] : [r.artist_name || r.credited_artist || 'Unknown artist']), guests: uniqueGuests };
 }
 
 // Newest day first (undated last); within the same day, favorite artists first.
@@ -490,9 +484,9 @@ function dayCell(r) {
 function renderFeed() {
   const feed = $('#feed'); feed.replaceChildren();
   updateFilterBadge();
-  const today = new Date().toLocaleDateString('en-CA');
+  const today = localDateString();
   const weekAgoDate = new Date(); weekAgoDate.setDate(weekAgoDate.getDate() - 7);
-  const weekAgo = weekAgoDate.toLocaleDateString('en-CA');
+  const weekAgo = localDateString(weekAgoDate);
 
   // The tracker only shows releases that are already out; upcoming ones live in the Upcoming tab.
   let list = visible().filter(r => !(r.release_date > today)), recentWeek = [];
@@ -570,7 +564,7 @@ function daysUntil(dateStr) {
 
 function renderUpcoming() {
   const feed = $('#upcomingFeed'); feed.replaceChildren();
-  const today = new Date().toLocaleDateString('en-CA');
+  const today = localDateString();
   const list = releases
     .filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r.release_date || '') && r.release_date > today &&
       (upcomingScope !== 'favorites' || isFavorite(r)))
@@ -815,7 +809,7 @@ function renderProfile(artist) {
   const box = $('#profile'); box.replaceChildren();
   document.title = `${artist.name} · Release Tracker`;
 
-  const today = new Date().toLocaleDateString('en-CA');
+  const today = localDateString();
   const mine = releases.filter(r => releaseArtistIds(r).some(ownerId => Number(ownerId) === id));
   const out = mine.filter(r => !(r.release_date > today));
   const upcoming = mine.filter(r => r.release_date > today).sort((a, b) => a.release_date.localeCompare(b.release_date));
@@ -984,8 +978,10 @@ $('#q').addEventListener('keydown', e => {
 document.querySelectorAll('.filters input').forEach(i => i.addEventListener('change', () => { shown = 40; renderFeed(); }));
 $('#checkBtn').addEventListener('click', async e => {
   const b = e.currentTarget; b.disabled = true; status('Checking for new releases…');
-  try { const result = await api('/check-now', { method: 'POST' }); await load();
-    status(result.failed ? `Check finished with ${result.failed} error${result.failed === 1 ? '' : 's'}; ${result.succeeded} artists updated.` : `Check finished. ${result.succeeded} artists checked; ${result.found} new releases found.` , result.failed > 0); }
+  try { const result = await api('/check-now', { method: 'POST' });
+    if (result.skipped) status('A release check is already in progress.');
+    else { await load();
+    status(result.failed ? `Check finished with ${result.failed} error${result.failed === 1 ? '' : 's'}; ${result.succeeded} artists updated.` : `Check finished. ${result.succeeded} artists checked; ${result.found} new releases found.` , result.failed > 0); } }
   catch (err) { status('Check failed: ' + err.message, true); }
   b.disabled = false;
 });
@@ -1048,9 +1044,9 @@ $('#exportBtn').addEventListener('click', async () => {
     const db = await DB.exportData();
     const data = { app: 'artist-tracker', version: 2, exported: new Date().toISOString(),
       artists: db.artists, releases: db.releases, meta: db.meta, favorites: [...favoriteArtistIds] };
-    const file = new File([JSON.stringify(data, null, 2)], `artist-tracker-backup-${new Date().toLocaleDateString('en-CA')}.json`, { type: 'application/json' });
+    const file = new File([JSON.stringify(data, null, 2)], `artist-tracker-backup-${localDateString()}.json`, { type: 'application/json' });
     if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file] });
-    else { const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
+    else { const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000); }
     status(`Exported ${db.artists.length} artists and ${db.releases.length} releases.`);
   } catch (e) { if (e.name !== 'AbortError') status('Export failed: ' + e.message, true); }
 });
@@ -1061,6 +1057,8 @@ $('#importFile').addEventListener('change', async e => {
     const d = JSON.parse(await f.text());
     if (d.app !== 'artist-tracker' || !Array.isArray(d.artists)) throw new Error('Not a valid Artist Tracker backup');
     if (d.releases != null && !Array.isArray(d.releases)) throw new Error('Backup release data is invalid');
+    if (d.meta != null && !Array.isArray(d.meta)) throw new Error('Backup metadata is invalid');
+    if (d.favorites != null && !Array.isArray(d.favorites)) throw new Error('Backup favorites data is invalid');
     if (d.artists.length > 10000 || (d.releases || []).length > 100000) throw new Error('Backup is unexpectedly large');
     let result;
     if (Array.isArray(d.releases)) {
@@ -1075,7 +1073,7 @@ $('#importFile').addEventListener('change', async e => {
       }
       result = { artists: restored, releases: 0, failed };
     }
-    for (const id of d.favorites || []) favoriteArtistIds.add(String(id));
+    for (const id of d.favorites || []) if (id != null) favoriteArtistIds.add(String(id));
     saveFavoriteIds();
     await load();
     status(`Restored ${result.artists} artists${Array.isArray(d.releases) ? ` and ${result.releases} releases` : ' from legacy backup'}${result.failed ? `; ${result.failed} failed` : ''}.`, !!result.failed);
