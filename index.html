@@ -402,7 +402,10 @@ function creditedArtistNames(r) {
   // Prefer the corrected structured credits; parse older rows from the title.
   const rawGuests = Array.isArray(r.featured_artists) && r.featured_artists.length
     ? r.featured_artists : splitTitle(r).guests;
-  const guests = rawGuests.flatMap(name => splitArtistCredits(name));
+  // Structured credits are arrays; the legacy title parser returns one string.
+  // Normalize both forms before parsing so older IndexedDB rows remain loadable.
+  const guestCredits = Array.isArray(rawGuests) ? rawGuests : (rawGuests ? [rawGuests] : []);
+  const guests = guestCredits.flatMap(name => splitArtistCredits(name));
   const guestKeys = new Set(guests.map(Classify.norm));
   const uniquePrimary = [...new Map(primary.filter(n => !guestKeys.has(Classify.norm(n)))
     .map(name => [Classify.norm(name), name])).values()];
