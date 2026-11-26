@@ -230,9 +230,20 @@ input[type=search],select{padding:.55rem .75rem}
 #searchForm{gap:.5rem}
 #searchForm .btn{min-width:82px}
 /* Profile page: compact hero, glanceable stats, browsable discography. */
-.profile-head{gap:1rem;margin:.5rem 0 1.2rem;padding:.25rem 0}
-.profile-photo{width:112px;height:112px;flex-basis:112px;box-shadow:var(--shadow)}
-.profile-name h2{font-size:clamp(1.5rem,4vw,2.2rem)}
+.profile-head{display:grid;grid-template-columns:104px minmax(0,1fr);gap:1rem;align-items:center;margin:.55rem 0 1.1rem;padding:1rem;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+.profile-photo{width:104px;height:104px;flex-basis:104px;box-shadow:var(--shadow)}
+.profile-name{gap:.5rem;align-items:flex-start}
+.profile-name h2{font-size:clamp(1.35rem,4vw,2rem);line-height:1.12}
+.profile-name .favorite-btn{flex:0 0 2.35rem}
+.profile-head .chips{gap:.35rem;margin:.5rem 0 0}
+.profile-head .chip{font-size:.76rem;padding:.2rem .55rem}
+.profile-head .link{display:inline-flex;align-items:center;min-height:36px;margin-top:.55rem!important;padding:.25rem .65rem;border:1px solid var(--line);border-radius:9px;text-decoration:none;font-size:.82rem;font-weight:600}
+.profile-head .link:hover{border-color:var(--accent);background:var(--bg)}
+.profile-panel-tools{display:flex;align-items:center;justify-content:flex-start;margin:0 0 .35rem}
+.profile-panel-tools .back-btn{margin:0;border:0;background:transparent;padding:.35rem .15rem;color:var(--muted);font-size:.9rem}
+.profile-panel-tools .back-btn:hover{color:var(--accent)}
+body.profile-open #checkBtn{display:none}
+body.profile-open header{margin-bottom:.7rem}
 .profile-section{margin-bottom:1rem;padding:1rem}
 .profile-section h3{font-size:1.02rem;font-weight:750;letter-spacing:-.015em}
 .stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:.85rem}
@@ -261,12 +272,16 @@ details.year{padding:.7rem 0}
  .period-controls{grid-template-columns:repeat(2,minmax(0,1fr))}
  .period-field{min-width:0}
  .period-field select{width:100%;min-width:0}
- .profile-head{flex-direction:row;align-items:center}
- .profile-photo{width:88px;height:88px;flex-basis:88px;font-size:2rem}
+ .profile-head{grid-template-columns:84px minmax(0,1fr);gap:.8rem;padding:.8rem;margin:.35rem 0 .9rem}
+ .profile-photo{width:84px;height:84px;flex-basis:84px;font-size:2rem}
+ .profile-name h2{font-size:clamp(1.25rem,5vw,1.65rem)}
  .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}
  .disco-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:.65rem}
 }
 @media(max-width:390px){
+ .profile-head{grid-template-columns:72px minmax(0,1fr);gap:.7rem;padding:.7rem}
+ .profile-photo{width:72px;height:72px;flex-basis:72px}
+ .profile-name h2{font-size:1.2rem}
  .wrap{padding-left:.8rem;padding-right:.8rem}
  header{gap:.5rem}
  h1{font-size:1.55rem}
@@ -323,7 +338,7 @@ details.year{padding:.7rem 0}
   </section>
 
   <section id="profilePanel" class="tab-panel" role="tabpanel" aria-label="Artist profile" hidden>
-    <button class="btn quiet back-btn" id="profileBack" type="button">← Back</button>
+    <div class="profile-panel-tools"><button class="btn quiet back-btn" id="profileBack" type="button">← All artists</button></div>
     <div id="profile"></div>
   </section>
 
@@ -837,6 +852,7 @@ function renderResults() {
 function renderAll() { updateCounts(); renderFeed(); renderUpcoming(); renderFollowing(); renderResults(); rerenderProfile(); }
 
 function selectTab(which) {
+  document.body.classList.toggle('profile-open', which === 'profile');
   for (const t of ['tracker', 'upcoming', 'artists', 'profile']) {
     const on = t === which;
     $('#' + t + 'Panel').hidden = !on;
@@ -981,10 +997,10 @@ function renderProfile(artist) {
 
   // ---- discography, grouped by type (long groups start collapsed)
   const disco = profileSection('Discography');
-  if (upcoming.length) disco.append(discoGroup(`Upcoming (${upcoming.length})`, upcoming, true, true));
+  if (upcoming.length) disco.append(discoGroup(`Upcoming (${upcoming.length})`, upcoming, false, true));
   for (const [cat, label] of CAT_GROUPS) {
     const items = out.filter(r => typeOf(r) === cat);
-    if (items.length) disco.append(discoGroup(`${label} (${items.length})`, items, items.length <= 24, false));
+    if (items.length) disco.append(discoGroup(`${label} (${items.length})`, items, false, false));
   }
   if (!out.length && !upcoming.length) disco.append(el('p', 'meta', 'No releases stored for this artist yet.'));
   box.append(disco);
@@ -1006,7 +1022,7 @@ function renderProfile(artist) {
     }
     hist.append(bars, el('p', 'meta', years[years.length - 1] === years[0] ? years[0] : `${years[years.length - 1]} – ${years[0]}`));
     years.forEach((y, i) => {
-      const list = byYear.get(y), d = el('details', 'year'); d.open = i === 0;
+      const list = byYear.get(y), d = el('details', 'year'); d.open = false;
       d.append(el('summary', null, `${y} · ${list.length} release${list.length === 1 ? '' : 's'}`));
       for (const r of list) {
         const row = el('div', 'hist-row'), body = el('span');
