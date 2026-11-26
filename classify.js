@@ -1,6 +1,6 @@
 // Port of Classify.py: pure rules, no network, no storage.
 const Classify = (() => {
-  const VERSION = 6, RECENT_DAYS = 30, NEW_FLAG_DAYS = 7, DUP_DAYS = 7;
+  const VERSION = 7, RECENT_DAYS = 30, NEW_FLAG_DAYS = 7, DUP_DAYS = 7;
   const SUFFIX = /\s-\s(single|ep)$/i;
   const FEAT = /[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s+([^\)\]]+)[\)\]]/gi;
   const LIVE = /[\(\[]\s*live\b|\s-\s*live\b|\blive\s+(?:at|in|from|on|session|sessions)\b|\bunplugged\b|\bin concert\b/i;
@@ -24,30 +24,36 @@ const Classify = (() => {
     if (!known.size) return [value];
 
     // Ampersands / "and" are stronger collaboration signals than commas.
-    // Each comma-delimited phrase is split only if every part can be grouped
-    // into exact followed-artist names (so "Tyler, the Creator" stays intact).
     const groups = value.split(/\s*(?:&|\band\b)\s*/i).map(x => x.trim()).filter(Boolean);
     const matchedGroup = groups.some(group => known.has(norm(group)));
     // Without a followed-artist match, an ampersand may be part of a solo name
     // such as "Earth, Wind & Fire"; preserve the original credit.
     if (groups.length > 1 && !matchedGroup) return [value];
-    if (groups.length > 1 && groups.some(group => group.includes(',') && !known.has(norm(group)))) return [value];
     const parsed = [];
     for (const group of groups) {
       const exact = known.get(norm(group));
       if (exact) { parsed.push(exact); continue; }
       const parts = group.split(/\s*,\s*/).map(x => x.trim()).filter(Boolean);
       if (parts.length < 2) { parsed.push(group); continue; }
-      const paths = Array(parts.length + 1).fill(null);
-      paths[0] = [];
+      // Best segmentation: known (possibly comma-containing) names win;
+      // leftover parts become separate single names. If no followed artist
+      // is found in the group, it stays whole (e.g. "Tyler, the Creator").
+      const best = Array(parts.length + 1).fill(null);
+      best[0] = { score: 0, items: [] };
       for (let i = 0; i < parts.length; i++) {
-        if (!paths[i]) continue;
+        if (!best[i]) continue;
+        const consider = (j, item, gain) => {
+          const score = best[i].score + gain;
+          if (!best[j] || score > best[j].score) best[j] = { score, items: [...best[i].items, item] };
+        };
+        consider(i + 1, parts[i], 0);
         for (let j = i + 1; j <= parts.length; j++) {
           const candidate = known.get(norm(parts.slice(i, j).join(', ')));
-          if (candidate) paths[j] = [...paths[i], candidate];
+          if (candidate) consider(j, candidate, j - i);
         }
       }
-      if (paths[parts.length]) parsed.push(...paths[parts.length]);
+      const result = best[parts.length];
+      if (result && result.score > 0) parsed.push(...result.items);
       else parsed.push(group);
     }
     return [...new Map(parsed.map(x => [norm(x), x])).values()];
