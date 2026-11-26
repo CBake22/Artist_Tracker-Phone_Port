@@ -1,6 +1,6 @@
 // Port of Classify.py: pure rules, no network, no storage.
 const Classify = (() => {
-  const VERSION = 7, RECENT_DAYS = 30, NEW_FLAG_DAYS = 7, DUP_DAYS = 7;
+  const VERSION = 8, RECENT_DAYS = 30, NEW_FLAG_DAYS = 7, DUP_DAYS = 7;
   const SUFFIX = /\s-\s(single|ep)$/i;
   const FEAT = /[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s+([^\)\]]+)[\)\]]/gi;
   const LIVE = /[\(\[]\s*live\b|\s-\s*live\b|\blive\s+(?:at|in|from|on|session|sessions)\b|\bunplugged\b|\bin concert\b/i;
@@ -25,14 +25,13 @@ const Classify = (() => {
 
     // Ampersands / "and" are stronger collaboration signals than commas.
     const groups = value.split(/\s*(?:&|\band\b)\s*/i).map(x => x.trim()).filter(Boolean);
-    const matchedGroup = groups.some(group => known.has(norm(group)));
-    // Without a followed-artist match, an ampersand may be part of a solo name
-    // such as "Earth, Wind & Fire"; preserve the original credit.
-    if (groups.length > 1 && !matchedGroup) return [value];
+    // Track whether any followed artist is actually found. If none is, the
+    // original credit is preserved (e.g. "Earth, Wind & Fire" stays one name).
+    let hit = false;
     const parsed = [];
     for (const group of groups) {
       const exact = known.get(norm(group));
-      if (exact) { parsed.push(exact); continue; }
+      if (exact) { parsed.push(exact); hit = true; continue; }
       const parts = group.split(/\s*,\s*/).map(x => x.trim()).filter(Boolean);
       if (parts.length < 2) { parsed.push(group); continue; }
       // Best segmentation: known (possibly comma-containing) names win;
@@ -53,9 +52,10 @@ const Classify = (() => {
         }
       }
       const result = best[parts.length];
-      if (result && result.score > 0) parsed.push(...result.items);
+      if (result && result.score > 0) { parsed.push(...result.items); hit = true; }
       else parsed.push(group);
     }
+    if (!hit) return [value];
     return [...new Map(parsed.map(x => [norm(x), x])).values()];
   }
 
