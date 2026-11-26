@@ -1,104 +1,121 @@
-// Port of Classify.py: pure rules, no network, no storage.
-const Classify = (() => {
-  const VERSION = 8, RECENT_DAYS = 30, NEW_FLAG_DAYS = 7, DUP_DAYS = 7;
-  const SUFFIX = /\s-\s(single|ep)$/i;
-  const FEAT = /[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s+([^\)\]]+)[\)\]]/gi;
-  const LIVE = /[\(\[]\s*live\b|\s-\s*live\b|\blive\s+(?:at|in|from|on|session|sessions)\b|\bunplugged\b|\bin concert\b/i;
-  const COMP = /\b(?:greatest hits|best of|the essentials?|anthology|the collection|very best|retrospective|b-sides)\b/i;
+// Run with: node classify.test.js
+// classify.js defines a top-level `const Classify`, so load it in a vm context.
+const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
+const Classify = vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'classify.js'), 'utf8') + '\n;Classify;');
 
-  const norm = s => String(s ?? '').normalize('NFKD').replace(/[^\x00-\x7F]/g, '').toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ').trim();
-  // Split a credit only when the boundaries are supported by known artist names.
-  // Commas are part of many official names (e.g. Tyler, the Creator), so they
-  // must never be treated as unconditional collaboration separators.
-  function splitCredits(raw, knownNames = []) {
-    const value = String(raw ?? '').trim();
-    if (!value) return [];
-    const known = new Map();
-    for (const item of knownNames) {
-      const name = String(item?.name ?? item ?? '').trim(), key = norm(name);
-      if (key && !known.has(key)) known.set(key, name);
-    }
-    const whole = known.get(norm(value));
-    if (whole) return [whole];
-    if (!known.size) return [value];
+let passed = 0, failed = 0;
+function test(name, fn) {
+  try { fn(); passed++; console.log('  ok   ' + name); }
+  catch (e) { failed++; console.log('  FAIL ' + name + '\n       ' + e.message.split('\n').join('\n       ')); }
+}
+// Arrays from the vm context have a different prototype; copy them so deepStrictEqual compares by value.
+const split = (credit, known) => Array.from(Classify.splitCredits(credit, known));
 
-    // Ampersands / "and" are stronger collaboration signals than commas.
-    const groups = value.split(/\s*(?:&|\band\b)\s*/i).map(x => x.trim()).filter(Boolean);
-    // Track whether any followed artist is actually found. If none is, the
-    // original credit is preserved (e.g. "Earth, Wind & Fire" stays one name).
-    let hit = false;
-    const parsed = [];
-    for (const group of groups) {
-      const exact = known.get(norm(group));
-      if (exact) { parsed.push(exact); hit = true; continue; }
-      const parts = group.split(/\s*,\s*/).map(x => x.trim()).filter(Boolean);
-      if (parts.length < 2) { parsed.push(group); continue; }
-      // Best segmentation: known (possibly comma-containing) names win;
-      // leftover parts become separate single names. If no followed artist
-      // is found in the group, it stays whole (e.g. "Tyler, the Creator").
-      const best = Array(parts.length + 1).fill(null);
-      best[0] = { score: 0, items: [] };
-      for (let i = 0; i < parts.length; i++) {
-        if (!best[i]) continue;
-        const consider = (j, item, gain) => {
-          const score = best[i].score + gain;
-          if (!best[j] || score > best[j].score) best[j] = { score, items: [...best[i].items, item] };
-        };
-        consider(i + 1, parts[i], 0);
-        for (let j = i + 1; j <= parts.length; j++) {
-          const candidate = known.get(norm(parts.slice(i, j).join(', ')));
-          if (candidate) consider(j, candidate, j - i);
-        }
-      }
-      const result = best[parts.length];
-      if (result && result.score > 0) { parsed.push(...result.items); hit = true; }
-      else parsed.push(group);
-    }
-    if (!hit) return [value];
-    return [...new Map(parsed.map(x => [norm(x), x])).values()];
-  }
+console.log('splitCredits');
+test('empty and nullish credits', () => {
+  assert.deepStrictEqual(split('', ['Nas']), []);
+  assert.deepStrictEqual(split(null, ['Nas']), []);
+});
+test('no followed artists: credit is kept whole', () => {
+  assert.deepStrictEqual(split('Mez, J. Cole & Anderson .Paak', []), ['Mez, J. Cole & Anderson .Paak']);
+});
+test('Hell Nah: comma + ampersand with two followed artists', () => {
+  assert.deepStrictEqual(split('Mez, J. Cole & Anderson .Paak', ['J. Cole', 'Anderson .Paak']),
+    ['Mez', 'J. Cole', 'Anderson .Paak']);
+});
+test('Hell Nah: only one followed artist', () => {
+  assert.deepStrictEqual(split('Mez, J. Cole & Anderson .Paak', ['J. Cole']),
+    ['Mez', 'J. Cole', 'Anderson .Paak']);
+});
+test('Martin 4sese: followed artists inside a comma group before the ampersand', () => {
+  assert.deepStrictEqual(split('Nas, Westside Gunn & Rome Streetz', ['Nas', 'Westside Gunn']),
+    ['Nas', 'Westside Gunn', 'Rome Streetz']);
+});
+test('commas only', () => {
+  assert.deepStrictEqual(split('Mez, J. Cole, Anderson .Paak', ['J. Cole', 'Anderson .Paak']),
+    ['Mez', 'J. Cole', 'Anderson .Paak']);
+});
+test('"and" separates like an ampersand', () => {
+  assert.deepStrictEqual(split('Nas and Jay-Z', ['Nas']), ['Nas', 'Jay-Z']);
+});
+test('followed name containing a comma stays intact', () => {
+  assert.deepStrictEqual(split('Tyler, the Creator', ['Tyler, the Creator']), ['Tyler, the Creator']);
+  assert.deepStrictEqual(split('Tyler, the Creator, Kanye West', ['Tyler, the Creator', 'Kanye West']),
+    ['Tyler, the Creator', 'Kanye West']);
+});
+test('unfollowed comma name is not split', () => {
+  assert.deepStrictEqual(split('Tyler, the Creator', ['Kanye West']), ['Tyler, the Creator']);
+});
+test('unfollowed name with an ampersand is not split', () => {
+  assert.deepStrictEqual(split('Earth, Wind & Fire', ['Nas']), ['Earth, Wind & Fire']);
+});
+test('followed name with an ampersand matches as a whole', () => {
+  assert.deepStrictEqual(split('Earth, Wind & Fire', ['Earth, Wind & Fire']), ['Earth, Wind & Fire']);
+});
+test('matching ignores case and accents, returns the followed spelling', () => {
+  assert.deepStrictEqual(split('beyonce & Jay-Z', ['Beyoncé']), ['Beyoncé', 'Jay-Z']);
+});
+test('duplicate names are collapsed', () => {
+  assert.deepStrictEqual(split('Nas & Nas', ['Nas']), ['Nas']);
+});
 
-  function classify(name, credited, followed, artistId) {
-    name = String(name ?? '');
-    const m = SUFFIX.exec(name);
-    const kind = !m ? 'Album' : (m[1].toLowerCase() === 'ep' ? 'EP' : 'Single');
-    const base = m ? name.slice(0, m.index) : name;
-    const fn = norm(followed), cn = norm(credited);
-    const guests = [...base.matchAll(FEAT)].flatMap(x => splitCredits(x[1], [followed]));
-    const primary = splitCredits(credited, [followed]);
-    const isOwnPrimary = primary.some(x => norm(x) === fn);
-    const isFeaturedGuest = guests.some(x => norm(x) === fn);
-    const isFeature = isFeaturedGuest || (!!cn && cn !== 'various artists' && !isOwnPrimary);
-    let variant = '';
-    if (LIVE.test(base)) variant = 'live';
-    else if (kind !== 'Single' && (COMP.test(base) || cn === 'various artists')) variant = 'compilation';
-    return { kind, is_feature: isFeature ? 1 : 0, variant, dedupe_key: `${artistId}|${kind}|${variant}|${norm(base)}` };
-  }
+console.log('classify');
+test('collaboration credit is the followed artist\'s own release, not a feature', () => {
+  const r = Classify.classify('Hell Nah', 'Mez, J. Cole & Anderson .Paak', 'J. Cole', 1);
+  assert.strictEqual(r.is_feature, 0);
+});
+test('another artist\'s release is a feature', () => {
+  assert.strictEqual(Classify.classify('Some Song', 'Drake', 'J. Cole', 1).is_feature, 1);
+});
+test('(feat. X) in the title marks a feature for the followed guest', () => {
+  assert.strictEqual(Classify.classify('Song (feat. J. Cole)', 'Drake', 'J. Cole', 1).is_feature, 1);
+});
+test('various artists is not a feature', () => {
+  assert.strictEqual(Classify.classify('Mix', 'Various Artists', 'J. Cole', 1).is_feature, 0);
+});
+test('kind comes from the Apple title suffix', () => {
+  assert.strictEqual(Classify.classify('Thing - Single', 'Nas', 'Nas', 1).kind, 'Single');
+  assert.strictEqual(Classify.classify('Thing - EP', 'Nas', 'Nas', 1).kind, 'EP');
+  assert.strictEqual(Classify.classify('Thing', 'Nas', 'Nas', 1).kind, 'Album');
+});
+test('live and compilation variants', () => {
+  assert.strictEqual(Classify.classify('Thing (Live at Red Rocks)', 'Nas', 'Nas', 1).variant, 'live');
+  assert.strictEqual(Classify.classify('Greatest Hits', 'Nas', 'Nas', 1).variant, 'compilation');
+  assert.strictEqual(Classify.classify('Greatest Hits - Single', 'Nas', 'Nas', 1).variant, '');
+});
+test('dedupe key ignores the single/EP suffix text and punctuation', () => {
+  const a = Classify.classify('Hello, World! - Single', 'Nas', 'Nas', 7);
+  assert.strictEqual(a.dedupe_key, '7|Single||hello world');
+});
+test('categoryOf priorities', () => {
+  assert.strictEqual(Classify.categoryOf('Album', true, 'live'), 'feature');
+  assert.strictEqual(Classify.categoryOf('Album', false, 'live'), 'live');
+  assert.strictEqual(Classify.categoryOf('EP', false, ''), 'ep');
+  assert.strictEqual(Classify.categoryOf('???', false, ''), 'album');
+});
 
-  function categoryOf(kind, isFeature, variant) {
-    if (isFeature) return 'feature';
-    if (variant === 'live' || variant === 'compilation') return variant;
-    const k = String(kind || '').toLowerCase();
-    return ['album', 'ep', 'single'].includes(k) ? k : 'album';
-  }
+console.log('dates');
+test('parseDate accepts real dates and rejects impossible ones', () => {
+  assert.strictEqual(Classify.parseDate('1970-01-02'), 1);
+  assert.strictEqual(Classify.parseDate('2024-02-29') !== null, true);
+  assert.strictEqual(Classify.parseDate('2023-02-29'), null);
+  assert.strictEqual(Classify.parseDate('2024-02-30'), null);
+  assert.strictEqual(Classify.parseDate('not a date'), null);
+  assert.strictEqual(Classify.parseDate(''), null);
+});
+test('isRecent uses a 30 day window', () => {
+  const today = Classify.parseDate('2026-06-30');
+  assert.strictEqual(Classify.isRecent('2026-06-01', today), true);
+  assert.strictEqual(Classify.isRecent('2026-05-31', today), true);
+  assert.strictEqual(Classify.isRecent('2026-05-30', today), false);
+  assert.strictEqual(Classify.isRecent('2026-07-15', today), true);  // announced, upcoming
+});
+test('isRepeat matches the same key within 7 days only', () => {
+  const seen = { k: [Classify.parseDate('2026-06-10')] };
+  assert.strictEqual(Classify.isRepeat('k', '2026-06-16', seen), true);
+  assert.strictEqual(Classify.isRepeat('k', '2026-06-18', seen), false);
+  assert.strictEqual(Classify.isRepeat('other', '2026-06-10', seen), false);
+});
 
-  // Dates are handled as whole-day numbers (days since 1970-01-01).
-  function parseDate(s) {
-    const t = String(s || '').slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
-    const [year, month, day] = t.split('-').map(Number);
-    const ms = Date.UTC(year, month - 1, day);
-    const d = new Date(ms);
-    return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day
-      ? Math.floor(ms / 864e5) : null;
-  }
-  const todayNum = () => { const n = new Date(); return Math.floor(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 864e5); };
-  const isRecent = (s, today = todayNum()) => { const d = parseDate(s); return d !== null && d >= today - RECENT_DAYS; };
-  const isRepeat = (key, s, seen) => {
-    const d = parseDate(s);
-    return !!(key && d !== null && (seen[key] || []).some(p => Math.abs(d - p) <= DUP_DAYS));
-  };
-
-  return { VERSION, NEW_FLAG_DAYS, DUP_DAYS, norm, splitCredits, classify, categoryOf, parseDate, isRecent, isRepeat };
-})();
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed ? 1 : 0);

@@ -292,13 +292,17 @@ details.year{padding:.7rem 0}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
 
+/* ---- seen / unseen ---- */
+button.badge{font-family:inherit;line-height:normal;cursor:pointer;position:relative;z-index:1}
+button.badge.new:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.filter-bar{gap:.5rem;flex-wrap:wrap}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header><div><h1>Artist Tracker</h1><p class="sub" id="count">Loading…</p><p class="sub updated" id="updated"></p></div><button class="btn primary" id="checkBtn" type="button" aria-label="Check for new releases">↻ Check</button></header>
   <nav class="tabs" aria-label="Main navigation" role="tablist">
-    <button class="tab active" id="trackerTab" type="button" role="tab" aria-selected="true" aria-controls="trackerPanel"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg><span class="tl">Releases</span></button>
+    <button class="tab active" id="trackerTab" type="button" role="tab" aria-selected="true" aria-controls="trackerPanel"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg><span class="tl">Releases</span><span class="tbadge" id="newCount" hidden></span></button>
     <button class="tab" id="upcomingTab" type="button" role="tab" aria-selected="false" aria-controls="upcomingPanel"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg><span class="tl">Upcoming</span><span class="tbadge" id="upCount" hidden></span></button>
     <button class="tab" id="artistsTab" type="button" role="tab" aria-selected="false" aria-controls="artistsPanel"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-6.5 7-6.5s7 2.6 7 6.5"/></svg><span class="tl">Artists</span></button>
   </nav>
@@ -306,7 +310,7 @@ details.year{padding:.7rem 0}
 
   <section id="trackerPanel" class="tab-panel" role="tabpanel" aria-labelledby="trackerTab">
     
-    <div class="filter-bar"><button class="btn" id="filterBtn" type="button" aria-expanded="false" aria-controls="filterPanel">Filters<span class="badge" id="filterCount" hidden></span></button></div>
+    <div class="filter-bar"><button class="btn" id="filterBtn" type="button" aria-expanded="false" aria-controls="filterPanel">Filters<span class="badge" id="filterCount" hidden></span></button><button class="btn" id="markSeenBtn" type="button" hidden>Mark all seen</button></div>
     <div id="filterPanel" hidden>
     <div class="period-controls" aria-label="Release period">
       <label class="period-field" for="artistFilter">Artists
@@ -314,6 +318,7 @@ details.year{padding:.7rem 0}
       </label>
       <label class="period-field" for="periodSelect">Period<select id="periodSelect"></select></label>
       <label class="period-field" id="yearField" for="yearSelect" hidden>Year<select id="yearSelect"></select></label>
+      <label class="period-field" for="seenFilter">Show<select id="seenFilter"><option value="all" selected>All releases</option><option value="unseen">Unseen only</option></select></label>
     </div>
     <fieldset class="filters" aria-label="Release types">
       <label><input type="checkbox" value="album" checked> Albums <span class="n" data-n="album"></span></label>
@@ -377,10 +382,11 @@ const $ = s => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 let releases = [], artists = [], lastResults = [], shown = 40;
 const FAVORITES_KEY = 'artistTracker.favoriteArtistIds';
-let favoriteArtistIds = loadFavoriteIds();
+let favoriteArtistIds = new Set();
 let artistSort = 'favorites';
 let artistFilter = 'all';
 let upcomingScope = 'all';
+let unseenOnly = false;
 let artistQuery = '', artistView = 'all', artistsShown = 30;
 const ARTIST_PAGE = 30;
 let artworkByArtist = new Map();
@@ -392,7 +398,7 @@ let selectedPeriod = 'recent', selectedDecade = '', selectedYear = 'all';
 const FILTERS_KEY = 'artistTracker.filters';
 function saveFilters() {
   try {
-    localStorage.setItem(FILTERS_KEY, JSON.stringify({ artistFilter, selectedPeriod, selectedDecade, selectedYear, upcomingScope,
+    localStorage.setItem(FILTERS_KEY, JSON.stringify({ artistFilter, selectedPeriod, selectedDecade, selectedYear, upcomingScope, unseenOnly,
       types: [...document.querySelectorAll('.filters input:checked')].map(i => i.value) }));
   } catch {}
 }
@@ -401,26 +407,42 @@ function saveFilters() {
     const f = JSON.parse(localStorage.getItem(FILTERS_KEY) || 'null'); if (!f) return;
     artistFilter = f.artistFilter || 'all'; selectedPeriod = f.selectedPeriod || 'recent';
     selectedDecade = f.selectedDecade || ''; selectedYear = f.selectedYear || 'all'; upcomingScope = f.upcomingScope || 'all';
-    $('#artistFilter').value = artistFilter; $('#upcomingScope').value = upcomingScope;
+    unseenOnly = !!f.unseenOnly;
+    $('#artistFilter').value = artistFilter; $('#upcomingScope').value = upcomingScope; $('#seenFilter').value = unseenOnly ? 'unseen' : 'all';
     if (Array.isArray(f.types)) document.querySelectorAll('.filters input').forEach(i => { i.checked = f.types.includes(i.value); });
   } catch {}
 })();
 function updateFilterBadge() {
-  const n = (artistFilter !== 'all') + (selectedPeriod !== 'recent') + document.querySelectorAll('.filters input:not(:checked)').length;
+  const n = (artistFilter !== 'all') + (selectedPeriod !== 'recent') + unseenOnly + document.querySelectorAll('.filters input:not(:checked)').length;
   const b = $('#filterCount'); b.textContent = n || ''; b.hidden = !n;
   saveFilters();
 }
 
-function loadFavoriteIds() {
+// Favorites live in IndexedDB (meta store) next to everything else, so they are backed up,
+// restored and evicted together with the rest of the data.
+async function loadFavoriteIds() {
+  let legacy = null;  // older versions kept favorites in localStorage
   try {
-    const stored = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
-    return new Set(Array.isArray(stored) ? stored.map(String) : []);
-  } catch { return new Set(); }
+    const stored = JSON.parse(localStorage.getItem(FAVORITES_KEY) || 'null');
+    if (Array.isArray(stored)) legacy = new Set(stored.map(String));
+  } catch {}
+  try {
+    const stored = await DB.getMeta('favorites');
+    if (stored != null) {
+      const list = JSON.parse(stored);
+      return new Set(Array.isArray(list) ? list.map(String) : []);
+    }
+    const migrated = legacy || new Set();  // one-time migration
+    await DB.setMeta('favorites', JSON.stringify([...migrated]));
+    try { localStorage.removeItem(FAVORITES_KEY); } catch {}
+    return migrated;
+  } catch { return legacy || new Set(); }
 }
 function saveFavoriteIds() {
-  try { localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favoriteArtistIds])); }
-  catch { status('Could not save favorites in this browser.', true); }
+  return DB.setMeta('favorites', JSON.stringify([...favoriteArtistIds]))
+    .catch(() => status('Could not save favorites in this browser.', true));
 }
+const favoritesReady = loadFavoriteIds().then(set => { favoriteArtistIds = set; });
 function toggleFavorite(artistId) {
   const id = String(artistId);
   if (favoriteArtistIds.has(id)) favoriteArtistIds.delete(id);
@@ -480,7 +502,7 @@ function updatePeriodVisibility() {
 }
 
 function load() {
-  return Promise.all([api('/artists'), api('/releases'), DB.getMeta('artist_check_status')])
+  return Promise.all([api('/artists'), api('/releases'), DB.getMeta('artist_check_status'), favoritesReady])
     .then(([artistData, releaseData, checkStatus]) => {
       artists = artistData;
       try { artistCheckStatuses = JSON.parse(checkStatus || '{}'); } catch { artistCheckStatuses = {}; }
@@ -578,6 +600,7 @@ function visible() {
   return releases.filter(r =>
     inSelectedPeriod(r) &&
     on.has(typeOf(r)) &&
+    (!unseenOnly || r.is_new) &&
     inArtistScope(r)
   );
 }
@@ -643,6 +666,7 @@ function renderFeed() {
       ? 'Search for an artist and follow them to start your feed.'
       : artistFilter === 'favorites' && trackedCount === 0
         ? 'You have not favorited any artists yet. Mark artists with a star in the Artist Menu.'
+        : unseenOnly ? 'No unseen releases. You are all caught up.'
         : 'No releases match this period and these filters.';
     feed.append(el('p', 'empty', message));
     return;
@@ -656,13 +680,20 @@ function renderFeed() {
     img.onerror = () => img.removeAttribute('src');
     row.append(img);
     const info = el('div'); const t = el('div', 'title', splitTitle(r).title);
-    if (r.is_new) t.append(el('span', 'badge new', 'New'));
+    if (r.is_new) {
+      const nb = el('button', 'badge new', 'New'); nb.type = 'button'; nb.title = 'Mark as seen';
+      nb.setAttribute('aria-label', 'Mark ' + cleanName(r.name || '') + ' as seen');
+      nb.onclick = () => markSeen(r.group_ids || [r.collection_id]);
+      t.append(nb);
+    }
     if (isFavorite(r)) t.append(el('span', 'badge fav', '★ Favorite'));
     const meta = metaLine(r);
     info.append(t, meta);
     row.append(info);
     if (r.url && r.url.startsWith('https://')) {
-      const a = el('a', 'row-link'); a.setAttribute('aria-label', 'Open ' + cleanName(r.name || '') + ' in Apple Music'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener'; row.append(a);
+      const a = el('a', 'row-link'); a.setAttribute('aria-label', 'Open ' + cleanName(r.name || '') + ' in Apple Music'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener';
+      if (r.is_new) a.addEventListener('click', () => markSeen(r.group_ids || [r.collection_id]));  // opening it counts as seen
+      row.append(a);
     }
     feed.append(row);
   };
@@ -689,6 +720,20 @@ function renderFeed() {
     more.onclick = () => { shown += 40; renderFeed(); };
     feed.append(more);
   }
+}
+
+const unseenReleases = () => { const today = localDateString(); return releases.filter(r => r.is_new && !(r.release_date > today)); };
+function updateNew() {
+  const n = unseenReleases().length, badge = $('#newCount');
+  badge.textContent = n > 99 ? '99+' : (n || ''); badge.hidden = !n;
+  $('#markSeenBtn').hidden = !n;
+}
+async function markSeen(ids) {
+  try { await DB.markSeen(ids); }
+  catch (e) { status('Could not save seen state: ' + e.message, true); return; }
+  const set = new Set(ids.map(Number));
+  for (const r of releases) if ((r.group_ids || [r.collection_id]).some(id => set.has(Number(id)))) r.is_new = false;
+  updateNew(); renderFeed();
 }
 
 function daysUntil(dateStr) {
@@ -849,7 +894,7 @@ function renderResults() {
   }
 }
 
-function renderAll() { updateCounts(); renderFeed(); renderUpcoming(); renderFollowing(); renderResults(); rerenderProfile(); }
+function renderAll() { updateCounts(); updateNew(); renderFeed(); renderUpcoming(); renderFollowing(); renderResults(); rerenderProfile(); }
 
 function selectTab(which) {
   document.body.classList.toggle('profile-open', which === 'profile');
@@ -1049,6 +1094,8 @@ $('#profileBack').addEventListener('click', () => {
 });
 window.addEventListener('hashchange', () => { if (loaded) routeFromHash(); });
 $('#upcomingScope').addEventListener('change', e => { upcomingScope = e.target.value; saveFilters(); renderUpcoming(); });
+$('#seenFilter').addEventListener('change', e => { unseenOnly = e.target.value === 'unseen'; shown = 40; renderFeed(); });
+$('#markSeenBtn').addEventListener('click', () => markSeen(unseenReleases().flatMap(r => r.group_ids || [r.collection_id])));
 $('#filterBtn').addEventListener('click', () => { const p = $('#filterPanel'); p.hidden = !p.hidden; $('#filterBtn').setAttribute('aria-expanded', String(!p.hidden)); });
 $('#artistFilter').addEventListener('change', e => {
   artistFilter = e.target.value;
@@ -1215,7 +1262,7 @@ $('#importFile').addEventListener('change', async e => {
       result = { artists: restored, releases: 0, failed };
     }
     for (const id of d.favorites || []) if (id != null) favoriteArtistIds.add(String(id));
-    saveFavoriteIds();
+    await saveFavoriteIds();
     await load();
     status(`Restored ${result.artists} artists${Array.isArray(d.releases) ? ` and ${result.releases} releases` : ' from legacy backup'}${result.failed ? `; ${result.failed} failed` : ''}.`, !!result.failed);
   } catch (err) { status('Import failed: ' + err.message, true); }

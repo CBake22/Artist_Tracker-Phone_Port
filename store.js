@@ -139,6 +139,21 @@ async function tx(stores, mode, fn) {
   await done;
   return out;
 }
+// ---------- "seen" state for New releases ----------
+// Seen ids live in the meta store ('seen_releases', a JSON array of collection ids).
+async function mergeSeen(metaStore, ids) {
+  let list = [];
+  try { list = JSON.parse((await req(metaStore.get('seen_releases')))?.value || '[]'); } catch {}
+  const set = new Set(list.map(Number));
+  for (const id of ids) { const n = Number(id); if (Number.isSafeInteger(n) && n > 0) set.add(n); }
+  metaStore.put({ key: 'seen_releases', value: JSON.stringify([...set]) });
+}
+// Before seen-tracking, a release stopped being "New" after NEW_FLAG_DAYS. Releases that were
+// already past that window count as seen, so updating does not make old releases look new.
+const legacySeenIds = rows => rows
+  .filter(x => x?.detected && (x.first_seen_at || 0) < Date.now() - Classify.NEW_FLAG_DAYS * 864e5)
+  .map(x => x.collection_id);
+
 const DB = {
   artists: () => tx('artists', 'readonly', s => req(s.getAll()))
     .then(a => a.sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }))),
@@ -195,7 +210,15 @@ const DB = {
         first_seen_at: old?.first_seen_at || release.first_seen_at || Date.now() };
       r.put(merged);
     }
-    for (const item of data.meta || []) if (item?.key && item.key !== 'classifier_version') m.put(item);
+    // Favorites and seen state are merged below / by the UI rather than overwritten.
+    const SKIP_META = new Set(['classifier_version', 'favorites', 'seen_releases', 'seen_migrated']);
+    for (const item of data.meta || []) if (item?.key && !SKIP_META.has(item.key)) m.put(item);
+    const seenItem = (data.meta || []).find(item => item?.key === 'seen_releases');
+    let seenIds = [];
+    if (seenItem) { try { seenIds = JSON.parse(seenItem.value || '[]'); } catch {} }
+    else seenIds = legacySeenIds(data.releases || []);  // backup from before seen-tracking
+    await mergeSeen(m, seenIds);
+    m.put({ key: 'seen_migrated', value: '1' });
     m.put({ key: 'classifier_version', value: '0' });
     return { artists: (data.artists || []).length, releases: (data.releases || []).length };
     });
@@ -203,6 +226,16 @@ const DB = {
     return result;
   },
   getMeta: k => tx('meta', 'readonly', async s => (await req(s.get(k)))?.value),
+  seenIds: async () => {
+    try { return new Set(JSON.parse(await DB.getMeta('seen_releases') || '[]').map(Number)); }
+    catch { return new Set(); }
+  },
+  markSeen: ids => tx('meta', 'readwrite', async m => { await mergeSeen(m, ids); }),
+  migrateSeen: () => tx(['meta', 'releases'], 'readwrite', async (m, r) => {
+    if (await req(m.get('seen_migrated'))) return;
+    await mergeSeen(m, legacySeenIds(await req(r.getAll())));
+    m.put({ key: 'seen_migrated', value: '1' });
+  }),
   setMeta: (k, v) => tx('meta', 'readwrite', async s => { s.put({ key: k, value: String(v) }); }),
   reclassify: (force = false) => tx(['meta', 'releases', 'artists'], 'readwrite', async (m, r, a) => {
     const v = await req(m.get('classifier_version'));
@@ -229,11 +262,11 @@ const DB = {
   }),
 };
 if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});  // ask iOS not to evict
-const ready = DB.reclassify();
+const ready = DB.reclassify().then(() => DB.migrateSeen());
 
 // ---------- release list (collapses repeat editions) ----------
 async function listReleases() {
-  const [rows, arts] = await Promise.all([DB.allReleases(), DB.artists()]);
+  const [rows, arts, seen] = await Promise.all([DB.allReleases(), DB.artists(), DB.seenIds()]);
   const names = new Map(arts.map(a => [a.artist_id, a.name]));
   rows.sort((a, b) => (!a.release_date - !b.release_date) ||
     b.release_date.localeCompare(a.release_date) || b.collection_id - a.collection_id);
@@ -243,10 +276,12 @@ async function listReleases() {
     r.artist_names = r.artist_ids.map(id => names.get(id)).filter(Boolean);
     r.artist_name = names.get(r.artist_id) || r.artist_names[0] || '';
     r.is_feature = !!r.is_feature;
-    r.is_new = !!r.detected && (Date.now() - (r.first_seen_at || 0)) <= Classify.NEW_FLAG_DAYS * 864e5;
+    r.is_new = !!r.detected && !seen.has(Number(r.collection_id));
+    r.group_ids = [r.collection_id];  // this row plus any repeat editions collapsed into it
     const key = r.dedupe_key, d = Classify.parseDate(r.release_date), prev = lastDate[key];
     if (key && prev != null && d !== null && Math.abs(prev - d) <= Classify.DUP_DAYS) {
       lastRow[key].is_new = lastRow[key].is_new || r.is_new;
+      lastRow[key].group_ids.push(r.collection_id);
       continue;
     }
     if (key) { lastDate[key] = d; lastRow[key] = r; }
