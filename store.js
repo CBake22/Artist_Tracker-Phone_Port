@@ -315,7 +315,7 @@ async function checkArtist(artist) {
   return { found, releases: data.releases.length, duration_ms: Date.now() - started };
 }
 let checking = false;
-async function checkReleases() {
+async function checkReleases(onProgress) {
   if (checking) return { skipped: true, succeeded: 0, failed: 0, found: 0 };
   checking = true;
   const summary = { skipped: false, succeeded: 0, failed: 0, found: 0, errors: [] };
@@ -324,7 +324,10 @@ async function checkReleases() {
     await DB.setMeta('last_attempt', Date.now());
     let statuses = {};
     try { statuses = JSON.parse(await DB.getMeta('artist_check_status') || '{}'); } catch {}
+    let done = 0;
+    const report = extra => { try { onProgress?.({ done, total: artists.length, artist: '', ...extra }); } catch {} };
     for (const a of artists) {
+      report({ artist: a.name });
       const started = Date.now();
       try {
         const result = await checkArtist(a);
@@ -337,20 +340,22 @@ async function checkReleases() {
         console.error('Check failed for', a.name, e);
       }
       await DB.setMeta('artist_check_status', JSON.stringify(statuses));
+      done++;
       await sleep(300);
     }
+    report({ finished: true });
     await DB.setMeta('last_attempt', Date.now());
     if (!summary.failed) await DB.setMeta('last_check', Date.now());
     return summary;
   } finally { checking = false; }
 }
 // Called on open and when the app returns to the foreground. Returns true if it ran.
-async function autoCheck() {
+async function autoCheck(onProgress) {
   await ready;
   if (checking || !(await DB.artists()).length) return false;
   const lastAttempt = Number(await DB.getMeta('last_attempt') || await DB.getMeta('last_check') || 0);
   if (Date.now() - lastAttempt < CHECK_EVERY_MS) return false;
-  await checkReleases();
+  await checkReleases(onProgress);
   return true;
 }
 
@@ -369,7 +374,7 @@ async function localApi(path, opts = {}) {
   if (p === '/artists' && method === 'GET') return DB.artists();
   if (p === '/releases') return listReleases();
   if (p === '/search') return searchArtists(u.searchParams.get('q') || '');
-  if (p === '/check-now' && method === 'POST') return checkReleases();
+  if (p === '/check-now' && method === 'POST') return checkReleases(opts.onProgress);
   if ((m = p.match(/^\/artists\/(\d+)\/follow$/))) return follow(+m[1]);
   if ((m = p.match(/^\/artists\/(\d+)$/)) && method === 'DELETE') { await DB.removeArtist(+m[1]); return { unfollowed: +m[1] }; }
   throw new Error('Not found');

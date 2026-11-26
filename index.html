@@ -205,7 +205,6 @@ input[type=search],select{padding:.55rem .75rem}
 #feed .title,#upcomingFeed .title{font-size:.94rem;line-height:1.3;margin-bottom:.28rem}
 #feed .meta,#upcomingFeed .meta{font-size:.77rem;line-height:1.45;overflow-wrap:anywhere}
 #feed .link,#upcomingFeed .link{grid-column:3}
-#feed .badge,#upcomingFeed .badge{font-size:.65rem;padding:.08rem .4rem}
 #feed .row-link,#upcomingFeed .row-link{border-radius:14px}
 #feed .empty,#upcomingFeed .empty{background:var(--card);border:1px dashed var(--line);border-radius:14px;padding:1.2rem}
 #feed>.btn,#upcomingFeed>.btn{margin:.5rem 0 1rem;min-height:44px}
@@ -293,9 +292,55 @@ details.year{padding:.7rem 0}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
 
 /* ---- seen / unseen ---- */
-button.badge{font-family:inherit;line-height:normal;cursor:pointer;position:relative;z-index:1}
+button.badge{font-family:inherit;appearance:none;-webkit-appearance:none;cursor:pointer;position:relative;z-index:1}
 button.badge.new:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .filter-bar{gap:.5rem;flex-wrap:wrap}
+.filter-bar[hidden]{display:none}
+
+/* ---- tokens: contrast-checked colors for light and dark ---- */
+:root{--gold:#8F6200;--line-strong:#7C8595;
+  --c-album:#2F4BFF;--c-ep:#6B3FD4;--c-single:#0E7A67;--c-feature:#B5470F;--c-live:#B8285F}
+@media (prefers-color-scheme:dark){:root{--gold:#F2C14E;--line-strong:#667085;
+  --c-album:#8EA2FF;--c-ep:#B79CFF;--c-single:#4FD1B5;--c-feature:#FF9A62;--c-live:#FF7FAE}}
+/* Form controls get a border that meets 3:1 against the surface; decorative dividers keep --line. */
+input[type=search],select,.btn.quiet,.favorite-btn,#filterBtn{border-color:var(--line-strong)}
+#filterBtn[aria-expanded="true"]{border-color:var(--accent)}
+.favorite-btn[aria-pressed="true"]{color:var(--gold);border-color:var(--gold)}
+input::placeholder{color:var(--muted);opacity:1}
+
+/* ---- one badge component: tinted outline = label, solid fill = count ---- */
+.badge,.pill{display:inline-flex;align-items:center;gap:.2rem;padding:.1rem .5rem;border:1px solid currentColor;border-radius:99px;
+  font-size:.68rem;font-weight:650;line-height:1.3;letter-spacing:.01em;white-space:nowrap;vertical-align:middle;
+  background:color-mix(in srgb,currentColor 10%,transparent)}
+.badge{margin-left:.45rem}
+.pill{margin-left:.15rem}
+.badge.new{color:var(--accent)}
+.badge.fav{color:var(--gold)}
+.badge.new,.badge.fav{border-color:currentColor;background:color-mix(in srgb,currentColor 10%,transparent)}
+.pill-album{color:var(--c-album)}.pill-ep{color:var(--c-ep)}.pill-single{color:var(--c-single)}
+.pill-feature{color:var(--c-feature)}.pill-live{color:var(--c-live)}.pill-compilation{color:var(--muted)}
+#filterCount{justify-content:center;background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.tbadge{font-weight:650}
+
+/* ---- check progress ---- */
+.progress{margin:0 0 .9rem}
+.progress[hidden]{display:none}
+.progress-bar{height:6px;border-radius:99px;background:var(--line);overflow:hidden}
+.progress-bar span{display:block;height:100%;width:0;background:var(--accent);border-radius:inherit;transition:width .25s}
+.progress-text{margin:.35rem 0 0;font-size:.8rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---- first-run onboarding ---- */
+.onboarding{grid-column:1/-1;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:1.5rem 1.2rem;box-shadow:var(--shadow);text-align:center}
+.onboarding h2{margin:0 0 .4rem;font-size:1.3rem;font-weight:800;letter-spacing:-.025em}
+.onboarding .ob-lead{margin:0 auto 1.1rem;max-width:34rem;color:var(--muted)}
+.ob-steps{display:grid;gap:.65rem;margin:0 auto 1.2rem;max-width:30rem;text-align:left}
+.ob-step{display:flex;align-items:center;gap:.75rem;font-size:.92rem}
+.ob-step b{flex:0 0 1.75rem;height:1.75rem;border-radius:50%;background:var(--accent);color:var(--on-accent);font-size:.85rem;display:flex;align-items:center;justify-content:center}
+.ob-label{margin:0 0 .5rem;font-size:.8rem;font-weight:600;color:var(--muted)}
+.ob-suggest{display:flex;flex-wrap:wrap;gap:.45rem;justify-content:center;margin:0 0 1.2rem}
+.suggest-chip{font:inherit;font-size:.85rem;min-height:38px;padding:.35rem .85rem;border:1px solid var(--line-strong);border-radius:99px;background:var(--bg);color:var(--ink);cursor:pointer}
+.suggest-chip:hover{border-color:var(--accent);color:var(--accent)}
+.ob-actions{display:flex;flex-wrap:wrap;gap:.5rem;justify-content:center}
 </style>
 </head>
 <body>
@@ -307,6 +352,7 @@ button.badge.new:hover{background:color-mix(in srgb,var(--accent) 12%,transparen
     <button class="tab" id="artistsTab" type="button" role="tab" aria-selected="false" aria-controls="artistsPanel"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-6.5 7-6.5s7 2.6 7 6.5"/></svg><span class="tl">Artists</span></button>
   </nav>
   <p class="status" id="status" role="status" aria-live="polite"></p>
+  <div class="progress" id="progress" hidden><div class="progress-bar" role="progressbar" aria-label="Release check progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="progressFill"></span></div><p class="progress-text" id="progressText"></p></div>
 
   <section id="trackerPanel" class="tab-panel" role="tabpanel" aria-labelledby="trackerTab">
     
@@ -640,6 +686,53 @@ function dayCell(r) {
   }
   return d;
 }
+const SUGGESTED_ARTISTS = ['Kendrick Lamar', 'Taylor Swift', 'Billie Eilish', 'Bad Bunny', 'SZA', 'Radiohead'];
+function searchFor(term) {
+  goTab('artists');
+  $('#q').value = term;
+  $('#searchForm').dispatchEvent(new Event('submit', { cancelable: true }));
+}
+function onboardingCard() {
+  const c = el('section', 'onboarding');
+  c.append(el('h2', null, 'Welcome to Artist Tracker'),
+    el('p', 'ob-lead', 'Follow your favorite artists and see every new album, EP and single in one feed.'));
+  const steps = el('div', 'ob-steps');
+  ['Search for an artist in the Artists tab and tap Follow.',
+   'Star your favorites to see them first and filter to just them.',
+   'New releases show up here after each check. Announced ones go in the Upcoming tab.']
+    .forEach((text, i) => { const s = el('div', 'ob-step'); s.append(el('b', null, String(i + 1)), el('span', null, text)); steps.append(s); });
+  c.append(steps, el('p', 'ob-label', 'Try searching for'));
+  const chips = el('div', 'ob-suggest');
+  for (const name of SUGGESTED_ARTISTS) {
+    const b = el('button', 'suggest-chip', name); b.type = 'button';
+    b.onclick = () => searchFor(name);
+    chips.append(b);
+  }
+  const actions = el('div', 'ob-actions');
+  const find = el('button', 'btn primary', 'Find artists'); find.type = 'button';
+  find.onclick = () => { goTab('artists'); $('#q').focus(); };
+  const restore = el('button', 'btn', 'Import a backup'); restore.type = 'button';
+  restore.onclick = () => $('#importFile').click();
+  actions.append(find, restore);
+  c.append(chips, actions);
+  return c;
+}
+// Progress for release checks: bar under the status line, counter on the Check button.
+const CHECK_LABEL = '↻ Check';
+function showCheckProgress(p) {
+  const box = $('#progress'), btn = $('#checkBtn');
+  if (!p || p.finished) {
+    if (!p && checking) return;  // another check is still running; leave its progress up
+    box.hidden = true; btn.textContent = CHECK_LABEL; return;
+  }
+  const pct = p.total ? Math.round(p.done / p.total * 100) : 0;
+  box.hidden = false;
+  $('#progressFill').style.width = pct + '%';
+  box.querySelector('[role=progressbar]').setAttribute('aria-valuenow', String(pct));
+  $('#progressText').textContent = `Checking ${Math.min(p.done + 1, p.total)} of ${p.total}${p.artist ? ' · ' + p.artist : ''}`;
+  btn.textContent = `↻ ${p.done}/${p.total}`;
+}
+
 function renderFeed() {
   const feed = $('#feed'); feed.replaceChildren();
   updateFilterBadge();
@@ -661,6 +754,9 @@ function renderFeed() {
     : artists.length;
   const trackedLabel = artistFilter === 'favorites' ? 'favorite artist' : 'followed artist';
   $('#count').textContent = `${total.toLocaleString()} releases · ${trackedCount} ${artistFilter === 'favorites' ? 'favorite' : 'followed'} artist${trackedCount === 1 ? '' : 's'}`;
+  $('.filter-bar').hidden = !artists.length;
+  if (!artists.length) $('#filterPanel').hidden = true;
+  if (!total && !artists.length) { feed.append(onboardingCard()); return; }
   if (!total) {
     const message = !artists.length
       ? 'Search for an artist and follow them to start your feed.'
@@ -1166,11 +1262,12 @@ $('#q').addEventListener('keydown', e => {
 document.querySelectorAll('.filters input').forEach(i => i.addEventListener('change', () => { shown = 40; renderFeed(); }));
 $('#checkBtn').addEventListener('click', async e => {
   const b = e.currentTarget; b.disabled = true; status('Checking for new releases…');
-  try { const result = await api('/check-now', { method: 'POST' });
+  try { const result = await api('/check-now', { method: 'POST', onProgress: showCheckProgress });
     if (result.skipped) status('A release check is already in progress.');
     else { await load();
     status(result.failed ? `Check finished with ${result.failed} error${result.failed === 1 ? '' : 's'}; ${result.succeeded} artists updated.` : `Check finished. ${result.succeeded} artists checked; ${result.found} new releases found.` , result.failed > 0); } }
   catch (err) { status('Check failed: ' + err.message, true); }
+  showCheckProgress(null);
   b.disabled = false;
 });
 async function refreshUpdated() {
@@ -1267,8 +1364,11 @@ $('#importFile').addEventListener('change', async e => {
     status(`Restored ${result.artists} artists${Array.isArray(d.releases) ? ` and ${result.releases} releases` : ' from legacy backup'}${result.failed ? `; ${result.failed} failed` : ''}.`, !!result.failed);
   } catch (err) { status('Import failed: ' + err.message, true); }
 });
-load().then(() => autoCheck()).then(ran => { if (ran) return load(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) autoCheck().then(ran => ran && load()); });
+const runAutoCheck = () => autoCheck(showCheckProgress)
+  .then(ran => { if (ran) { showCheckProgress(null); return load(); } })
+  .catch(() => showCheckProgress(null));
+load().then(runAutoCheck);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) runAutoCheck(); });
 if ('serviceWorker' in navigator) {
   const hadController = !!navigator.serviceWorker.controller;
   let reloadTimer;
