@@ -1,5 +1,5 @@
 // Offline app shell plus bounded runtime caching for Apple Music artwork.
-const V = 'tracker-v17';
+const V = 'tracker-v16';
 const ART = 'tracker-artwork-v1';
 const SHELL = ['./', 'index.html', 'classify.js', 'store.js', 'manifest.json'];
 const ART_HOSTS = new Set(['is1-ssl.mzstatic.com','is2-ssl.mzstatic.com','is3-ssl.mzstatic.com','is4-ssl.mzstatic.com','is5-ssl.mzstatic.com','is6-ssl.mzstatic.com','is7-ssl.mzstatic.com','is8-ssl.mzstatic.com','is9-ssl.mzstatic.com','is10-ssl.mzstatic.com','is11-ssl.mzstatic.com','is12-ssl.mzstatic.com','is13-ssl.mzstatic.com','is14-ssl.mzstatic.com','is15-ssl.mzstatic.com','is16-ssl.mzstatic.com','is17-ssl.mzstatic.com','is18-ssl.mzstatic.com','is19-ssl.mzstatic.com','is20-ssl.mzstatic.com','is21-ssl.mzstatic.com','is22-ssl.mzstatic.com','is23-ssl.mzstatic.com','is24-ssl.mzstatic.com','is25-ssl.mzstatic.com','is26-ssl.mzstatic.com','is27-ssl.mzstatic.com','is28-ssl.mzstatic.com','is29-ssl.mzstatic.com','is30-ssl.mzstatic.com','is31-ssl.mzstatic.com','is32-ssl.mzstatic.com','is33-ssl.mzstatic.com','is34-ssl.mzstatic.com','is35-ssl.mzstatic.com','is36-ssl.mzstatic.com','is37-ssl.mzstatic.com','is38-ssl.mzstatic.com','is39-ssl.mzstatic.com','is40-ssl.mzstatic.com']);
