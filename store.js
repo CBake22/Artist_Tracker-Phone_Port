@@ -56,7 +56,11 @@ async function get(path, params) {
       if (i < 2) await sleep(Math.min(8000, 1000 * (2 ** i)));
     }
   }
-  throw new Error('Apple Music request failed: ' + (last?.message || 'unknown error'));
+  const err = new Error('Apple Music request failed: ' + (last?.message || 'unknown error'));
+  err.status = last?.status;
+  // No HTTP status (offline, timeout, bad/blocked response), rate limiting or a server error: not this artist's fault.
+  err.transient = !last?.status || last.status === 429 || last.status === 403 || last.status >= 500;
+  throw err;
 }
 const FEATURE_CREDIT_RX = /[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s+([^\)\]]+)[\)\]]/gi;
 function featuredCredits(title, followedNames = []) {
@@ -184,6 +188,7 @@ const DB = {
   // `detected` and first_seen_at are only set on first insert, like the SQL upsert.
   addReleases: (id, list) => tx(['releases', 'artists'], 'readwrite', async (s, a) => {
     const followed = await req(a.getAll());
+    if (!followed.some(x => Number(x.artist_id) === Number(id))) return;  // unfollowed during the check: write nothing
     // Issue every read at once instead of awaiting them one by one.
     const olds = await Promise.all(list.map(r => req(s.get(r.collection_id))));
     list.forEach((r, i) => {
@@ -358,58 +363,80 @@ async function dueArtists(artists, statuses) {
   return due;
 }
 const CONCURRENCY = 4, PAUSE_MS = 100, FLUSH_EVERY = 10;
-async function pool(items, n, fn) {
+const BREAKER = 5;                         // consecutive network-type failures before a check gives up
+const INTERRUPTED_RETRY_MS = 2 * 60 * 1000; // an unfinished check is retried after this, not after 6 hours
+let flushNow = null;                        // lets the page save progress the moment it goes to the background
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => { if (document.hidden && flushNow) flushNow(); });
+async function pool(items, n, fn, shouldStop = () => false) {
   let i = 0;
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
-    while (i < items.length) await fn(items[i++]);  // fn must not throw
+    while (i < items.length && !shouldStop()) await fn(items[i++]);  // fn must not throw
   }));
 }
 async function checkReleases(onProgress) {
   if (checking) return { skipped: true, succeeded: 0, failed: 0, found: 0 };
+  // Offline: do nothing and touch no state, so nothing is marked failed and the next check retries normally.
+  if (typeof navigator !== 'undefined' && navigator.onLine === false)
+    return { skipped: false, offline: true, succeeded: 0, failed: 0, found: 0, deferred: 0, errors: [] };
   checking = true;
-  const summary = { skipped: false, succeeded: 0, failed: 0, found: 0, deferred: 0, errors: [] };
+  const summary = { skipped: false, offline: false, aborted: false, notChecked: 0, succeeded: 0, failed: 0, found: 0, deferred: 0, errors: [] };
   try {
     const artists = await DB.artists();
     const followedNames = artists.map(a => a.name);  // loaded once for the whole check
-    await DB.setMeta('last_attempt', Date.now());
+    // Cleared only when the check finishes, so a check killed midway is retried soon (see autoCheck).
+    await DB.setMeta('check_started', Date.now());
+    await DB.setMeta('check_incomplete', '1');
     let statuses = {};
     try { statuses = JSON.parse(await DB.getMeta('artist_check_status') || '{}'); } catch {}
+    const followedIds = new Set(artists.map(a => String(a.artist_id)));
+    for (const k of Object.keys(statuses)) if (!followedIds.has(k)) delete statuses[k];  // drop unfollowed artists
     const due = await dueArtists(artists, statuses);
     summary.deferred = artists.length - due.length;
-    let done = 0, unsaved = 0;
+    let done = 0, unsaved = 0, streak = 0, aborted = false;
     const report = extra => { try { onProgress?.({ done, total: due.length, artist: '', ...extra }); } catch {} };
     const flush = () => { unsaved = 0; return DB.setMeta('artist_check_status', JSON.stringify(statuses)).catch(() => {}); };
+    flushNow = flush;
     await pool(due, CONCURRENCY, async ({ artist: a, full }) => {
       report({ artist: a.name });
       const started = Date.now(), prev = statuses[a.artist_id] || {};
       const lastFull = prev.full_at ?? (prev.status === 'success' ? prev.checked_at || 0 : 0);
       try {
         const result = await checkArtist(a, followedNames, full ? FULL_LIMIT : ROUTINE_LIMIT);
-        summary.succeeded++; summary.found += result.found;
+        summary.succeeded++; summary.found += result.found; streak = 0;
         statuses[a.artist_id] = { status: 'success', checked_at: Date.now(), releases: result.releases,
-          new_releases: result.found, duration_ms: result.duration_ms, error: '', full_at: full ? Date.now() : lastFull };
+          new_releases: result.found, duration_ms: result.duration_ms, error: '', full_at: full ? Date.now() : lastFull,
+          last_success_at: Date.now() };
       } catch (e) {
         summary.failed++; summary.errors.push({ artist: a.name, message: e.message });
-        statuses[a.artist_id] = { status: 'error', checked_at: Date.now(), duration_ms: Date.now() - started, error: e.message, full_at: prev.full_at };
+        // A failure must not erase when this artist last checked out fine.
+        const lastOk = prev.last_success_at ?? (prev.status === 'success' ? prev.checked_at : undefined);
+        statuses[a.artist_id] = { status: 'error', checked_at: Date.now(), duration_ms: Date.now() - started,
+          error: e.message, full_at: lastFull, last_success_at: lastOk };
+        if (e.transient) { if (++streak >= BREAKER) aborted = true; } else streak = 0;
         console.error('Check failed for', a.name, e);
       }
       done++;
       if (++unsaved >= FLUSH_EVERY) await flush();  // periodic save: a closed app loses little
       await sleep(PAUSE_MS);
-    });
+    }, () => aborted);
+    // Artists never attempted (after an abort) keep their previous status untouched.
+    summary.aborted = aborted; summary.notChecked = due.length - done;
     await flush();
     report({ finished: true });
     await DB.setMeta('last_attempt', Date.now());
+    await DB.setMeta('check_incomplete', '0');
     if (!summary.failed) await DB.setMeta('last_check', Date.now());
     return summary;
-  } finally { checking = false; }
+  } finally { checking = false; flushNow = null; }
 }
-// Called on open and when the app returns to the foreground. Returns true if it ran.
+// Called on open, when the app returns to the foreground, and when the network comes back. Returns true if it ran.
 async function autoCheck(onProgress) {
   await ready;
-  if (checking || !(await DB.artists()).length) return false;
-  const lastAttempt = Number(await DB.getMeta('last_attempt') || await DB.getMeta('last_check') || 0);
-  if (Date.now() - lastAttempt < CHECK_EVERY_MS) return false;
+  if (checking || (typeof navigator !== 'undefined' && navigator.onLine === false) || !(await DB.artists()).length) return false;
+  const interrupted = (await DB.getMeta('check_incomplete')) === '1';
+  const since = interrupted ? Number(await DB.getMeta('check_started') || 0)
+    : Number(await DB.getMeta('last_attempt') || await DB.getMeta('last_check') || 0);
+  if (Date.now() - since < (interrupted ? INTERRUPTED_RETRY_MS : CHECK_EVERY_MS)) return false;
   await checkReleases(onProgress);
   return true;
 }

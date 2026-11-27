@@ -1113,7 +1113,9 @@ function renderProfile(artist) {
     for (const g of genres) chips.append(el('span', 'chip', g));
     if (check) {
       const validDate = check.checked_at && Number.isFinite(new Date(check.checked_at).getTime());
-      const detail = check.status === 'error' ? 'Last check failed'
+      const lastOk = check.last_success_at && Number.isFinite(new Date(check.last_success_at).getTime())
+        ? ` · last OK ${new Date(check.last_success_at).toLocaleDateString()}` : '';
+      const detail = check.status === 'error' ? 'Last check failed' + lastOk
         : validDate ? `Checked ${new Date(check.checked_at).toLocaleDateString()}` : 'Checked';
       chips.append(el('span', 'chip' + (check.status === 'error' ? ' check-error' : ''), detail));
     }
@@ -1264,6 +1266,9 @@ $('#checkBtn').addEventListener('click', async e => {
   const b = e.currentTarget; b.disabled = true; status('Checking for new releases…');
   try { const result = await api('/check-now', { method: 'POST', onProgress: showCheckProgress });
     if (result.skipped) status('A release check is already in progress.');
+    else if (result.offline) status('You appear to be offline. Try again once you are connected.', true);
+    else if (result.aborted) { await load();
+      status(`Check stopped after repeated network errors: ${result.succeeded} artists updated, ${result.notChecked} not checked. Try again shortly.`, true); }
     else { await load();
     const skippedNote = result.deferred ? ` ${result.deferred} checked recently, skipped.` : '';
     status((result.failed ? `Check finished with ${result.failed} error${result.failed === 1 ? '' : 's'}; ${result.succeeded} artists updated.` : `Check finished. ${result.succeeded} artists checked; ${result.found} new releases found.`) + skippedNote, result.failed > 0); } }
@@ -1370,12 +1375,13 @@ const runAutoCheck = () => autoCheck(showCheckProgress)
   .catch(() => showCheckProgress(null));
 load().then(runAutoCheck);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) runAutoCheck(); });
+addEventListener('online', runAutoCheck);  // catch up as soon as the connection returns
 if ('serviceWorker' in navigator) {
   const hadController = !!navigator.serviceWorker.controller;
   let reloadTimer;
   const scheduleReload = () => {  // debounce, and never reload in the middle of a check
     clearTimeout(reloadTimer);
-    const go = () => $('#checkBtn').disabled ? (reloadTimer = setTimeout(go, 3000)) : location.reload();
+    const go = () => (checking || $('#checkBtn').disabled) ? (reloadTimer = setTimeout(go, 3000)) : location.reload();
     reloadTimer = setTimeout(go, 1500);
   };
   navigator.serviceWorker.addEventListener('message', e => { if (e.data === 'updated') scheduleReload(); });

@@ -1,13 +1,17 @@
 // Port of Classify.py: pure rules, no network, no storage.
 const Classify = (() => {
-  const VERSION = 9, RECENT_DAYS = 30, NEW_FLAG_DAYS = 7, DUP_DAYS = 7;
+  const VERSION = 10, RECENT_DAYS = 30, NEW_FLAG_DAYS = 7, DUP_DAYS = 7;
   const SUFFIX = /\s-\s(single|ep)$/i;
   const FEAT = /[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s+([^\)\]]+)[\)\]]/gi;
   const LIVE = /[\(\[]\s*live\b|\s-\s*live\b|\blive\s+(?:at|in|from|on|session|sessions)\b|\bunplugged\b|\bin concert\b/i;
   const COMP = /\b(?:greatest hits|best of|the essentials?|anthology|the collection|very best|retrospective|b-sides)\b/i;
 
-  const norm = s => String(s ?? '').normalize('NFKD').replace(/[^\x00-\x7F]/g, '').toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ').trim();
+  // Letters and digits of every script are kept (Japanese, Korean, Cyrillic... must not normalize to ''),
+  // but accents are folded on Latin letters only (e-acute -> e). Marks on other scripts (kana voicing,
+  // Hangul jamo) are part of the letter, so they stay.
+  const norm = s => String(s ?? '').normalize('NFKD')
+    .replace(/(\p{Script=Latin})\p{M}+/gu, '$1')
+    .toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, ' ').trim();
   // Split a credit only when the boundaries are supported by known artist names.
   // Commas are part of many official names (e.g. Tyler, the Creator), so they
   // must never be treated as unconditional collaboration separators.
@@ -73,7 +77,7 @@ const Classify = (() => {
     let variant = '';
     if (LIVE.test(base)) variant = 'live';
     else if (kind !== 'Single' && (COMP.test(base) || cn === 'various artists')) variant = 'compilation';
-    return { kind, is_feature: isFeature ? 1 : 0, variant, dedupe_key: `${artistId}|${kind}|${variant}|${norm(base)}` };
+    return { kind, is_feature: isFeature ? 1 : 0, variant, dedupe_key: `${artistId}|${kind}|${variant}|${norm(base) || base.trim().toLowerCase()}` };  // emoji-only titles never share an empty key
   }
 
   function categoryOf(kind, isFeature, variant) {

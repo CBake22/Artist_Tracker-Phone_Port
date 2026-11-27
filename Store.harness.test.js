@@ -2,6 +2,7 @@ const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const J=(a,b,m)=>assert.strictEqual(JSON.stringify(a),JSON.stringify(b),m);
 const SKIP = !!process.env.SKIP;
 let store = fs.readFileSync('store.js','utf8');
+store = store.replace('const ready = DB.reclassify().then(() => DB.migrateSeen());', 'const ready = Promise.resolve();');
 if (SKIP) store = store.replace('const COLD_EVERY_MS = 0;', 'const COLD_EVERY_MS = 24 * 3600 * 1000;');
 const src = fs.readFileSync('classify.js','utf8') + '\n' + store + `
 ;(async () => { const SKIP = ${SKIP};
@@ -67,6 +68,91 @@ const src = fs.readFileSync('classify.js','utf8') + '\n' + store + `
   J(full, {1:false,3:false,4:true,5:false,6:true,7:true}, 'full refresh only when >14d or never');
   console.log('dueArtists ok:', ids.join(','), JSON.stringify(full)); }
 
+  // ---- hardening: #2 interrupted checks, #3 unfollow mid-check, #4 offline / breaker
+  fetch = async () => ({ ok: false, status: 404 });
+  try { await get('/lookup', { id: 1 }); assert.fail('should throw'); } catch (e) { assert.strictEqual(e.status, 404); assert.strictEqual(e.transient, false); }
+  fetch = async () => ({ ok: false, status: 503 });
+  try { await get('/lookup', { id: 1 }); assert.fail('should throw'); } catch (e) { assert.strictEqual(e.status, 503); assert.strictEqual(e.transient, true); }
+  console.log('get() transient flag ok');
+
+  const quiet = console.error; console.error = () => {};
+  const reset = () => { S.artists.m.clear(); S.releases.m.clear(); S.meta.m.clear(); };
+  const addArts = n => { for (let i = 1; i <= n; i++) S.artists.m.set(i, { artist_id: i, name: 'x' + i }); };
+  const setM = (k, v) => S.meta.m.set(k, { key: k, value: String(v) });
+  const okGet = async (p, params) => ({ results: [{ wrapperType: 'artist', artistId: params.id, artistName: 'x' + params.id, artistLinkUrl: 'https://a' }] });
+
+  // #3 addReleases refuses an unfollowed artist
+  reset(); S.artists.m.set(1, { artist_id: 1, name: 'Nas' });
+  await DB.addReleases(2, [{ collection_id: 50, name: 'Ghost', credited_artist: 'Gone' }]);
+  assert.strictEqual(S.releases.m.size, 0, 'no rows for unfollowed artist');
+  await DB.addReleases(1, [{ collection_id: 51, name: 'Real', credited_artist: 'Nas' }]);
+  assert.strictEqual(S.releases.m.size, 1);
+  // ...and end to end: artist 2 is removed while its lookup is in flight; also checks the smaller artwork size
+  reset(); addArts(3);
+  get = async (p, params) => {
+    if (params.id === 2) S.artists.m.delete(2);
+    return { results: [{ wrapperType: 'artist', artistId: params.id, artistName: 'x' + params.id, artistLinkUrl: 'https://a' },
+      { wrapperType: 'collection', collectionId: 700 + params.id, collectionName: 'Alb' + params.id, artistName: 'x' + params.id,
+        releaseDate: '2024-01-01T00:00:00Z', collectionViewUrl: 'https://c', artworkUrl100: 'https://x/100x100bb.jpg', collectionType: 'Album', trackCount: 5 }] };
+  };
+  await checkReleases();
+  assert.ok(!S.releases.m.has(702), 'no orphan release for the removed artist');
+  assert.ok(S.releases.m.has(701) && S.releases.m.has(703));
+  assert.ok(S.releases.m.get(701).artwork_url.includes('300x300'), 'new artwork size');
+  console.log('unfollow mid-check ok');
+
+  // #4 offline: nothing runs, no state touched
+  reset(); addArts(3); navigator.onLine = false;
+  const off = await checkReleases();
+  assert.ok(off.offline && !S.meta.m.has('check_started') && !S.meta.m.has('last_attempt') && !S.meta.m.has('artist_check_status'));
+  assert.strictEqual(await autoCheck(), false);
+  navigator.onLine = true;
+  console.log('offline ok');
+
+  // #4 circuit breaker: stops early, untouched artists keep their status, errors keep last_success_at
+  reset(); addArts(20);
+  const st0 = {}; for (let i = 1; i <= 20; i++) st0[i] = { status: 'success', checked_at: 1000 + i, full_at: Date.now(), last_success_at: 1000 + i };
+  setM('artist_check_status', JSON.stringify(st0));
+  let attempts = 0;
+  get = async () => { attempts++; const e = new Error('offline'); e.transient = true; throw e; };
+  const ab = await checkReleases();
+  assert.ok(ab.aborted); assert.ok(ab.failed >= 5 && ab.failed <= 8, 'stopped soon after 5 failures: ' + ab.failed);
+  assert.strictEqual(ab.failed + ab.notChecked, 20); assert.strictEqual(attempts, ab.failed);
+  const st1 = JSON.parse(S.meta.m.get('artist_check_status').value);
+  let errs = 0;
+  for (let i = 1; i <= 20; i++) {
+    if (st1[i].status === 'error') { errs++; assert.strictEqual(st1[i].last_success_at, 1000 + i, 'last success survives a failure'); }
+    else assert.strictEqual(st1[i].checked_at, 1000 + i, 'not attempted: status untouched');
+  }
+  assert.strictEqual(errs, ab.failed);
+  assert.strictEqual(S.meta.m.get('check_incomplete').value, '0'); assert.ok(!S.meta.m.has('last_check'));
+  // non-network failures (e.g. one artist missing at Apple) never trip the breaker
+  reset(); addArts(10);
+  get = async () => { throw new Error('HTTP 404'); };
+  const nt = await checkReleases();
+  assert.strictEqual(nt.aborted, false); assert.strictEqual(nt.failed, 10);
+  console.log('circuit breaker ok');
+
+  // #2 interrupted checks are retried soon, finished ones wait the normal interval
+  reset(); addArts(2);
+  let sawFlag = null;
+  get = async (p, params) => { sawFlag = S.meta.m.get('check_incomplete')?.value; return okGet(p, params); };
+  await checkReleases();
+  assert.strictEqual(sawFlag, '1', 'flag is set while running'); assert.strictEqual(S.meta.m.get('check_incomplete').value, '0');
+  get = okGet;
+  const t0 = Date.now();
+  setM('last_attempt', t0); setM('check_incomplete', '0');
+  assert.strictEqual(await autoCheck(), false, 'finished just now: wait');
+  setM('check_incomplete', '1'); setM('check_started', t0 - 30e3);
+  assert.strictEqual(await autoCheck(), false, 'interrupted 30s ago: not yet');
+  setM('check_started', t0 - 3 * 60e3);
+  assert.strictEqual(await autoCheck(), true, 'interrupted 3 min ago: retry now');
+  assert.strictEqual(S.meta.m.get('check_incomplete').value, '0');
+  setM('last_attempt', t0 - 7 * 3600e3);
+  assert.strictEqual(await autoCheck(), true, 'finished 7h ago: due');
+  console.log('interrupted-check retry ok');
+  console.error = quiet; reset();
+
   // ---- end-to-end checkReleases with a stubbed network
   S.releases.m.clear(); S.meta.m.clear();
   const calls = [];
@@ -87,7 +173,7 @@ const src = fs.readFileSync('classify.js','utf8') + '\n' + store + `
   if (!SKIP) { J([r3.succeeded, r3.deferred], [3, 0]); console.log('checkReleases e2e ok (no skipping)'); return; }
   J([r3.succeeded, r3.deferred], [1, 2]); J(calls, [30], 'routine limit used');
   console.log('checkReleases e2e ok');
-})().then(() => console.log('ALL OK'), e => { console.error('FAIL', e); process.exitCode = 1; });
+})().then(() => console.log('ALL OK'), e => { process.stderr.write('FAIL ' + (e && e.message || e) + '\\n'); process.exitCode = 1; });
 `;
-const ctx = vm.createContext({ console, setTimeout, clearTimeout, structuredClone, J, process, navigator: {}, indexedDB: { open: () => ({}) }, assert, URLSearchParams });
+const ctx = vm.createContext({ console, setTimeout, clearTimeout, structuredClone, J, process, AbortController, navigator: {}, indexedDB: { open: () => ({}) }, assert, URLSearchParams });
 vm.runInContext(src, ctx);
