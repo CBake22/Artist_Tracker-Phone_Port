@@ -43,7 +43,7 @@ async function get(path, params) {
     } catch (e) {
       last = e;
       // Do not retry permanent client errors; retry rate limits, server errors and network failures.
-      if (e.status && e.status >= 400 && e.status < 500 && e.status !== 429) break;
+      if (e.status && e.status >= 400 && e.status < 500 && e.status !== 429 && e.status !== 403) break;
       if (i < 2) await sleep(Math.min(8000, 1000 * (2 ** i)));
     }
   }
@@ -77,8 +77,8 @@ function parseRelease(x, followed, artistId, followedNames = []) {
     ...Classify.classify(name, credited, followed, artistId),
   };
 }
-async function lookupArtist(id, limit = 200) {
-  const followedNames = (await DB.artists()).map(a => a.name);
+async function lookupArtist(id, limit = 200, knownNames = null) {
+  const followedNames = knownNames || (await DB.artists()).map(a => a.name);
   const results = (await get('/lookup', { id, entity: 'album', sort: 'recent', limit })).results || [];
   const a = results.find(x => x.wrapperType === 'artist');
   if (!a || !a.artistId || !a.artistName) return null;
@@ -175,14 +175,16 @@ const DB = {
   // `detected` and first_seen_at are only set on first insert, like the SQL upsert.
   addReleases: (id, list) => tx(['releases', 'artists'], 'readwrite', async (s, a) => {
     const followed = await req(a.getAll());
-    for (const r of list) {
-      const old = await req(s.get(r.collection_id));
+    // Issue every read at once instead of awaiting them one by one.
+    const olds = await Promise.all(list.map(r => req(s.get(r.collection_id))));
+    list.forEach((r, i) => {
+      const old = olds[i];
       const owners = new Set([...ownerIds(old), Number(id),
         ...creditedOwnerIds([r.credited_artist, ...(r.featured_artists || [])].filter(Boolean), followed)].filter(Number.isSafeInteger));
       s.put({ ...old, ...r, artist_id: old?.artist_id ?? id, artist_ids: [...owners],
               detected: old ? old.detected : (r.detected || 0),
               first_seen_at: old ? old.first_seen_at : Date.now() });
-    }
+    });
   }),
   exportData: () => tx(['artists', 'releases', 'meta'], 'readonly', async (a, r, m) => ({
     artists: await req(a.getAll()), releases: await req(r.getAll()), meta: await req(m.getAll())
@@ -292,9 +294,9 @@ async function listReleases() {
 }
 
 // ---------- checking for new releases ----------
-async function checkArtist(artist) {
+async function checkArtist(artist, followedNames) {
   const started = Date.now();
-  const data = await lookupArtist(artist.artist_id);
+  const data = await lookupArtist(artist.artist_id, 200, followedNames);
   if (!data) throw new Error('Artist was not returned by Apple Music');
   const existing = await DB.artistReleases(artist.artist_id);
   const known = new Set(existing.map(r => r.collection_id)), seen = {};
@@ -315,22 +317,31 @@ async function checkArtist(artist) {
   return { found, releases: data.releases.length, duration_ms: Date.now() - started };
 }
 let checking = false;
+const CONCURRENCY = 4, PAUSE_MS = 100, FLUSH_EVERY = 10;
+async function pool(items, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (i < items.length) await fn(items[i++]);  // fn must not throw
+  }));
+}
 async function checkReleases(onProgress) {
   if (checking) return { skipped: true, succeeded: 0, failed: 0, found: 0 };
   checking = true;
   const summary = { skipped: false, succeeded: 0, failed: 0, found: 0, errors: [] };
   try {
     const artists = await DB.artists();
+    const followedNames = artists.map(a => a.name);  // loaded once for the whole check
     await DB.setMeta('last_attempt', Date.now());
     let statuses = {};
     try { statuses = JSON.parse(await DB.getMeta('artist_check_status') || '{}'); } catch {}
-    let done = 0;
+    let done = 0, unsaved = 0;
     const report = extra => { try { onProgress?.({ done, total: artists.length, artist: '', ...extra }); } catch {} };
-    for (const a of artists) {
+    const flush = () => { unsaved = 0; return DB.setMeta('artist_check_status', JSON.stringify(statuses)).catch(() => {}); };
+    await pool(artists, CONCURRENCY, async a => {
       report({ artist: a.name });
       const started = Date.now();
       try {
-        const result = await checkArtist(a);
+        const result = await checkArtist(a, followedNames);
         summary.succeeded++; summary.found += result.found;
         statuses[a.artist_id] = { status: 'success', checked_at: Date.now(), releases: result.releases,
           new_releases: result.found, duration_ms: result.duration_ms, error: '' };
@@ -339,10 +350,11 @@ async function checkReleases(onProgress) {
         statuses[a.artist_id] = { status: 'error', checked_at: Date.now(), duration_ms: Date.now() - started, error: e.message };
         console.error('Check failed for', a.name, e);
       }
-      await DB.setMeta('artist_check_status', JSON.stringify(statuses));
       done++;
-      await sleep(300);
-    }
+      if (++unsaved >= FLUSH_EVERY) await flush();  // periodic save: a closed app loses little
+      await sleep(PAUSE_MS);
+    });
+    await flush();
     report({ finished: true });
     await DB.setMeta('last_attempt', Date.now());
     if (!summary.failed) await DB.setMeta('last_check', Date.now());
