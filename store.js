@@ -4,7 +4,10 @@ const CHECK_EVERY_MS = 6 * 3600 * 1000;
 const ART_SIZE = '300x300';                 // shown at 64-140px; 300 covers 2x/3x screens
 const ROUTINE_LIMIT = 30, FULL_LIMIT = 200; // newest releases per routine check vs. full refresh
 const FULL_EVERY_MS = 14 * 864e5;           // each artist gets a full refresh at least this often
-const HOT_DAYS = 90, COLD_EVERY_MS = 24 * 3600 * 1000;
+const HOT_DAYS = 90;
+// Skipping is OFF: every artist is checked every time. To skip artists that were checked recently and
+// are not favorites / recently active, set this to e.g. 24 * 3600 * 1000 (24 hours).
+const COLD_EVERY_MS = 0;
 const isoDaysAgo = n => { const d = new Date(Date.now() - n * 864e5);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -334,18 +337,23 @@ let checking = false;
 // Hot artists (favorites, or any release within HOT_DAYS / announced) are checked every time; the rest
 // at most once per COLD_EVERY_MS. Failed or never-checked artists are always due.
 async function dueArtists(artists, statuses) {
+  const now = Date.now();
+  const withFull = a => {   // routine vs. full lookup still applies when nobody is skipped
+    const st = statuses[a.artist_id] || {};
+    const lastFull = st.full_at ?? (st.status === 'success' ? st.checked_at || 0 : 0);
+    return { artist: a, full: now - lastFull >= FULL_EVERY_MS };
+  };
+  if (!COLD_EVERY_MS) return artists.map(withFull);
   const [rows, favRaw] = await Promise.all([DB.allReleases(), DB.getMeta('favorites')]);
   let favs = new Set(); try { favs = new Set(JSON.parse(favRaw || '[]').map(String)); } catch {}
-  const cutoff = isoDaysAgo(HOT_DAYS), active = new Set(), now = Date.now(), due = [];
+  const cutoff = isoDaysAgo(HOT_DAYS), active = new Set(), due = [];
   for (const r of rows) if ((r.release_date || '') >= cutoff) for (const id of ownerIds(r)) active.add(id);
   for (const a of artists) {
     const st = statuses[a.artist_id] || {};
     const hot = favs.has(String(a.artist_id)) || active.has(Number(a.artist_id));
     const ok = st.status === 'success';
     if (ok && !hot && now - (st.checked_at || 0) < COLD_EVERY_MS) continue;
-    // Checks before routine mode were all full, so a successful old check counts as a full one.
-    const lastFull = st.full_at ?? (ok ? st.checked_at || 0 : 0);
-    due.push({ artist: a, full: now - lastFull >= FULL_EVERY_MS });
+    due.push(withFull(a));  // old successful checks count as full ones (they all were)
   }
   return due;
 }

@@ -1,7 +1,10 @@
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const J=(a,b,m)=>assert.strictEqual(JSON.stringify(a),JSON.stringify(b),m);
-const src = fs.readFileSync('classify.js','utf8') + '\n' + fs.readFileSync('store.js','utf8') + `
-;(async () => {
+const SKIP = !!process.env.SKIP;
+let store = fs.readFileSync('store.js','utf8');
+if (SKIP) store = store.replace('const COLD_EVERY_MS = 0;', 'const COLD_EVERY_MS = 24 * 3600 * 1000;');
+const src = fs.readFileSync('classify.js','utf8') + '\n' + store + `
+;(async () => { const SKIP = ${SKIP};
   // ---- in-memory fake of the transaction layer
   const mk = keyPath => { const m = new Map(); const rq = v => { const r = {}; setTimeout(() => { r.result = v; r.onsuccess && r.onsuccess(); }, 0); return r; };
     return { m, get: k => rq(structuredClone(m.get(k))), getAll: () => rq([...m.values()].map(x => structuredClone(x))),
@@ -57,12 +60,12 @@ const src = fs.readFileSync('classify.js','utf8') + '\n' + fs.readFileSync('stor
   const arts = [1,2,3,4,5,6,7].map(i => ({ artist_id: i, name: 'x'+i }));
   const ok = (ago, extra={}) => ({ status:'success', checked_at: now - ago, ...extra });
   const st = { 1: ok(60e3), 2: ok(60e3), 3: ok(60e3), 4: { status:'error', checked_at: now-60e3 }, 5: ok(2*day), 6: ok(60e3, { full_at: now - 20*day }) };
-  const due = await dueArtists(arts, st);
+  const due = await dueArtists(arts, st); if (!SKIP) { assert.strictEqual(due.length, 7, 'nobody skipped'); console.log('no-skip dueArtists ok (7 of 7)'); } else {
   const ids = due.map(d => d.artist.artist_id);
   J(ids, [1,3,4,5,6,7], 'cold+recent (2) skipped; hot/fav/failed/stale/new due');
   const full = Object.fromEntries(due.map(d => [d.artist.artist_id, d.full]));
   J(full, {1:false,3:false,4:true,5:false,6:true,7:true}, 'full refresh only when >14d or never');
-  console.log('dueArtists ok:', ids.join(','), JSON.stringify(full));
+  console.log('dueArtists ok:', ids.join(','), JSON.stringify(full)); }
 
   // ---- end-to-end checkReleases with a stubbed network
   S.releases.m.clear(); S.meta.m.clear();
@@ -74,12 +77,14 @@ const src = fs.readFileSync('classify.js','utf8') + '\n' + fs.readFileSync('stor
   J([r1.succeeded, r1.deferred], [3, 0]); J(calls, [200,200,200]);
   calls.length = 0;
   let r2 = await checkReleases();   // immediately again: everyone cold (no releases) and fresh
-  J([r2.succeeded, r2.deferred], [0, 3]); assert.strictEqual(calls.length, 0);
+  if (SKIP) { J([r2.succeeded, r2.deferred], [0, 3]); assert.strictEqual(calls.length, 0); }
+  else { J([r2.succeeded, r2.deferred], [3, 0]); J(calls, [30,30,30], 'routine limit when nobody is skipped'); }
   const stat = JSON.parse(S.meta.m.get('artist_check_status').value);
   assert.ok(stat[1].full_at, 'full_at recorded');
   // make 1 stale (25h old, routine since full_at recent)
   stat[1].checked_at -= 25*3600e3; S.meta.m.set('artist_check_status', { key:'artist_check_status', value: JSON.stringify(stat) });
   calls.length = 0; let r3 = await checkReleases();
+  if (!SKIP) { J([r3.succeeded, r3.deferred], [3, 0]); console.log('checkReleases e2e ok (no skipping)'); return; }
   J([r3.succeeded, r3.deferred], [1, 2]); J(calls, [30], 'routine limit used');
   console.log('checkReleases e2e ok');
 })().then(() => console.log('ALL OK'), e => { console.error('FAIL', e); process.exitCode = 1; });
