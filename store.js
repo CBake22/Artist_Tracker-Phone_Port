@@ -1,6 +1,12 @@
 // Browser replacement for Itunes.py + Db.py + Main.py. Exposes localApi(), autoCheck().
 const BASE = 'https://itunes.apple.com';
 const CHECK_EVERY_MS = 6 * 3600 * 1000;
+const ART_SIZE = '300x300';                 // shown at 64-140px; 300 covers 2x/3x screens
+const ROUTINE_LIMIT = 30, FULL_LIMIT = 200; // newest releases per routine check vs. full refresh
+const FULL_EVERY_MS = 14 * 864e5;           // each artist gets a full refresh at least this often
+const HOT_DAYS = 90, COLD_EVERY_MS = 24 * 3600 * 1000;
+const isoDaysAgo = n => { const d = new Date(Date.now() - n * 864e5);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- iTunes client (fetch, with JSONP fallback if the browser blocks CORS) ----------
@@ -70,7 +76,7 @@ function parseRelease(x, followed, artistId, followedNames = []) {
     featured_artists: featuredCredits(name, followedNames),
     release_date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '',
     url: url.startsWith('https://') ? url : null,
-    artwork_url: String(x.artworkUrl100 || '').replace('100x100', '600x600'),
+    artwork_url: String(x.artworkUrl100 || '').replace('100x100', ART_SIZE),
     type: String(x.collectionType || 'Album'), credited_artist: credited,
     genre: String(x.primaryGenreName || ''), track_count: parseInt(x.trackCount, 10) || 0,
     explicit: String(x.collectionExplicitness || ''),
@@ -161,7 +167,7 @@ const DB = {
   artistReleases: id => tx('releases', 'readonly', s => req(s.index('artist_ids').getAll(id))),
   addArtist: async a => {
     await tx('artists', 'readwrite', async s => { if (!await req(s.get(a.artist_id))) s.put(a); });
-    await DB.reclassify(true);
+    await DB.reclassify(true, a.name);  // only rows whose credits mention the new artist can change
   },
   removeArtist: id => tx(['releases', 'artists'], 'readwrite', async (r, a) => {
     const rows = await req(r.index('artist_ids').getAll(id));
@@ -239,14 +245,20 @@ const DB = {
     m.put({ key: 'seen_migrated', value: '1' });
   }),
   setMeta: (k, v) => tx('meta', 'readwrite', async s => { s.put({ key: k, value: String(v) }); }),
-  reclassify: (force = false) => tx(['meta', 'releases', 'artists'], 'readwrite', async (m, r, a) => {
+  reclassify: (force = false, onlyName = null) => tx(['meta', 'releases', 'artists'], 'readwrite', async (m, r, a) => {
     const v = await req(m.get('classifier_version'));
     if (!force && v && v.value === String(Classify.VERSION)) return 0;
+    // Partial mode: touch only rows whose title or credit contains the given name.
+    const needle = onlyName == null ? null : ` ${Classify.norm(onlyName)} `;
+    if (needle && !needle.trim()) return 0;
     const arts = new Map((await req(a.getAll())).map(x => [x.artist_id, x]));
     const rows = await req(r.getAll());
     const followed = [...arts.values()];
+    let touched = 0;
     for (const x of rows) {
       const ar = arts.get(x.artist_id); if (!ar) continue;
+      if (needle && !` ${Classify.norm((x.primary_artist_credit || x.credited_artist || '') + ' ' + (x.name || ''))} `.includes(needle)) continue;
+      touched++;
       // Rebuild inferred ownership from the primary lookup owner and parsed credits.
       // This removes false collaborator links created by the old comma-splitting parser.
       const featured = featuredCredits(x.name, followed.map(a => a.name));
@@ -257,10 +269,11 @@ const DB = {
         primary_artist_credit: credited,
         primary_artists: credited ? [credited] : [],
         featured_artists: featured,
+        artwork_url: String(x.artwork_url || '').replace('600x600', ART_SIZE),  // migrate old large artwork URLs
         artist_ids: [...owners] });
     }
-    m.put({ key: 'classifier_version', value: String(Classify.VERSION) });
-    return rows.length;
+    if (!needle) m.put({ key: 'classifier_version', value: String(Classify.VERSION) });  // partial runs are not a full pass
+    return touched;
   }),
 };
 if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});  // ask iOS not to evict
@@ -294,9 +307,9 @@ async function listReleases() {
 }
 
 // ---------- checking for new releases ----------
-async function checkArtist(artist, followedNames) {
+async function checkArtist(artist, followedNames, limit = FULL_LIMIT) {
   const started = Date.now();
-  const data = await lookupArtist(artist.artist_id, 200, followedNames);
+  const data = await lookupArtist(artist.artist_id, limit, followedNames);
   if (!data) throw new Error('Artist was not returned by Apple Music');
   const existing = await DB.artistReleases(artist.artist_id);
   const known = new Set(existing.map(r => r.collection_id)), seen = {};
@@ -317,6 +330,25 @@ async function checkArtist(artist, followedNames) {
   return { found, releases: data.releases.length, duration_ms: Date.now() - started };
 }
 let checking = false;
+// Decide who needs a lookup now, and whether it is a routine (newest 30) or full (200) one.
+// Hot artists (favorites, or any release within HOT_DAYS / announced) are checked every time; the rest
+// at most once per COLD_EVERY_MS. Failed or never-checked artists are always due.
+async function dueArtists(artists, statuses) {
+  const [rows, favRaw] = await Promise.all([DB.allReleases(), DB.getMeta('favorites')]);
+  let favs = new Set(); try { favs = new Set(JSON.parse(favRaw || '[]').map(String)); } catch {}
+  const cutoff = isoDaysAgo(HOT_DAYS), active = new Set(), now = Date.now(), due = [];
+  for (const r of rows) if ((r.release_date || '') >= cutoff) for (const id of ownerIds(r)) active.add(id);
+  for (const a of artists) {
+    const st = statuses[a.artist_id] || {};
+    const hot = favs.has(String(a.artist_id)) || active.has(Number(a.artist_id));
+    const ok = st.status === 'success';
+    if (ok && !hot && now - (st.checked_at || 0) < COLD_EVERY_MS) continue;
+    // Checks before routine mode were all full, so a successful old check counts as a full one.
+    const lastFull = st.full_at ?? (ok ? st.checked_at || 0 : 0);
+    due.push({ artist: a, full: now - lastFull >= FULL_EVERY_MS });
+  }
+  return due;
+}
 const CONCURRENCY = 4, PAUSE_MS = 100, FLUSH_EVERY = 10;
 async function pool(items, n, fn) {
   let i = 0;
@@ -327,27 +359,30 @@ async function pool(items, n, fn) {
 async function checkReleases(onProgress) {
   if (checking) return { skipped: true, succeeded: 0, failed: 0, found: 0 };
   checking = true;
-  const summary = { skipped: false, succeeded: 0, failed: 0, found: 0, errors: [] };
+  const summary = { skipped: false, succeeded: 0, failed: 0, found: 0, deferred: 0, errors: [] };
   try {
     const artists = await DB.artists();
     const followedNames = artists.map(a => a.name);  // loaded once for the whole check
     await DB.setMeta('last_attempt', Date.now());
     let statuses = {};
     try { statuses = JSON.parse(await DB.getMeta('artist_check_status') || '{}'); } catch {}
+    const due = await dueArtists(artists, statuses);
+    summary.deferred = artists.length - due.length;
     let done = 0, unsaved = 0;
-    const report = extra => { try { onProgress?.({ done, total: artists.length, artist: '', ...extra }); } catch {} };
+    const report = extra => { try { onProgress?.({ done, total: due.length, artist: '', ...extra }); } catch {} };
     const flush = () => { unsaved = 0; return DB.setMeta('artist_check_status', JSON.stringify(statuses)).catch(() => {}); };
-    await pool(artists, CONCURRENCY, async a => {
+    await pool(due, CONCURRENCY, async ({ artist: a, full }) => {
       report({ artist: a.name });
-      const started = Date.now();
+      const started = Date.now(), prev = statuses[a.artist_id] || {};
+      const lastFull = prev.full_at ?? (prev.status === 'success' ? prev.checked_at || 0 : 0);
       try {
-        const result = await checkArtist(a, followedNames);
+        const result = await checkArtist(a, followedNames, full ? FULL_LIMIT : ROUTINE_LIMIT);
         summary.succeeded++; summary.found += result.found;
         statuses[a.artist_id] = { status: 'success', checked_at: Date.now(), releases: result.releases,
-          new_releases: result.found, duration_ms: result.duration_ms, error: '' };
+          new_releases: result.found, duration_ms: result.duration_ms, error: '', full_at: full ? Date.now() : lastFull };
       } catch (e) {
         summary.failed++; summary.errors.push({ artist: a.name, message: e.message });
-        statuses[a.artist_id] = { status: 'error', checked_at: Date.now(), duration_ms: Date.now() - started, error: e.message };
+        statuses[a.artist_id] = { status: 'error', checked_at: Date.now(), duration_ms: Date.now() - started, error: e.message, full_at: prev.full_at };
         console.error('Check failed for', a.name, e);
       }
       done++;

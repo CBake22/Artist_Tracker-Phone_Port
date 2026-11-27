@@ -1265,7 +1265,8 @@ $('#checkBtn').addEventListener('click', async e => {
   try { const result = await api('/check-now', { method: 'POST', onProgress: showCheckProgress });
     if (result.skipped) status('A release check is already in progress.');
     else { await load();
-    status(result.failed ? `Check finished with ${result.failed} error${result.failed === 1 ? '' : 's'}; ${result.succeeded} artists updated.` : `Check finished. ${result.succeeded} artists checked; ${result.found} new releases found.` , result.failed > 0); } }
+    const skippedNote = result.deferred ? ` ${result.deferred} checked recently, skipped.` : '';
+    status((result.failed ? `Check finished with ${result.failed} error${result.failed === 1 ? '' : 's'}; ${result.succeeded} artists updated.` : `Check finished. ${result.succeeded} artists checked; ${result.found} new releases found.`) + skippedNote, result.failed > 0); } }
   catch (err) { status('Check failed: ' + err.message, true); }
   showCheckProgress(null);
   b.disabled = false;
