@@ -15,14 +15,20 @@ const Classify = (() => {
   // Split a credit only when the boundaries are supported by known artist names.
   // Commas are part of many official names (e.g. Tyler, the Creator), so they
   // must never be treated as unconditional collaboration separators.
-  function splitCredits(raw, knownNames = []) {
-    const value = String(raw ?? '').trim();
-    if (!value) return [];
+  // Lookup of normalized name -> official spelling. Build it once and pass it to splitCredits
+  // instead of the raw name list when splitting many credits against the same artists.
+  function knownMap(knownNames = []) {
     const known = new Map();
     for (const item of knownNames) {
       const name = String(item?.name ?? item ?? '').trim(), key = norm(name);
       if (key && !known.has(key)) known.set(key, name);
     }
+    return known;
+  }
+  function splitCredits(raw, knownNames = []) {
+    const value = String(raw ?? '').trim();
+    if (!value) return [];
+    const known = knownNames instanceof Map ? knownNames : knownMap(knownNames);
     const whole = known.get(norm(value));
     if (whole) return [whole];
     if (!known.size) return [value];
@@ -104,5 +110,5 @@ const Classify = (() => {
     return !!(key && d !== null && (seen[key] || []).some(p => Math.abs(d - p) <= DUP_DAYS));
   };
 
-  return { VERSION, NEW_FLAG_DAYS, DUP_DAYS, norm, splitCredits, classify, categoryOf, parseDate, isRecent, isRepeat };
+  return { VERSION, NEW_FLAG_DAYS, DUP_DAYS, norm, knownMap, splitCredits, classify, categoryOf, parseDate, isRecent, isRepeat };
 })();

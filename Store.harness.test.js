@@ -146,11 +146,26 @@ const src = fs.readFileSync('classify.js','utf8') + '\n' + store + `
   setM('check_incomplete', '1'); setM('check_started', t0 - 30e3);
   assert.strictEqual(await autoCheck(), false, 'interrupted 30s ago: not yet');
   setM('check_started', t0 - 3 * 60e3);
-  assert.strictEqual(await autoCheck(), true, 'interrupted 3 min ago: retry now');
+  assert.ok(await autoCheck(), 'interrupted 3 min ago: retry now');
   assert.strictEqual(S.meta.m.get('check_incomplete').value, '0');
   setM('last_attempt', t0 - 7 * 3600e3);
-  assert.strictEqual(await autoCheck(), true, 'finished 7h ago: due');
+  assert.ok(await autoCheck(), 'finished 7h ago: due');
   console.log('interrupted-check retry ok');
+  // ---- unchanged rows are not rewritten; changes are counted and reported
+  reset(); addArts(1);
+  const base = { collection_id: 800, name: 'Alb', credited_artist: 'x1', primary_artist_credit: 'x1', release_date: '2024-01-01', artwork_url: 'https://x/300x300bb.jpg', track_count: 5 };
+  let w = await DB.addReleases(1, [base]); J([w.inserted, w.changed], [1, 0]);
+  let puts = 0; const origPut = S.releases.put; S.releases.put = v => { puts++; return origPut(v); };
+  w = await DB.addReleases(1, [base]); J([w.inserted, w.changed], [0, 0]); assert.strictEqual(puts, 0, 'identical row is not rewritten');
+  w = await DB.addReleases(1, [{ ...base, track_count: 6 }]); J([w.inserted, w.changed], [0, 1]); assert.strictEqual(puts, 1, 'changed row is written');
+  S.releases.put = origPut;
+  reset(); addArts(2);
+  get = async (p, params) => ({ results: [{ wrapperType: 'artist', artistId: params.id, artistName: 'x' + params.id, artistLinkUrl: 'https://a' },
+    { wrapperType: 'collection', collectionId: 900 + params.id, collectionName: 'A' + params.id, artistName: 'x' + params.id, releaseDate: '2024-01-01T00:00:00Z',
+      collectionViewUrl: 'https://c', artworkUrl100: 'https://x/100x100bb.jpg', collectionType: 'Album', trackCount: 5 }] });
+  const c1 = await checkReleases(); assert.strictEqual(c1.changed, 2, 'first check stores new rows');
+  const c2 = await checkReleases(); J([c2.changed, c2.found], [0, 0]);   // nothing new: callers can skip the reload
+  console.log('unchanged-row skipping ok');
   console.error = quiet; reset();
 
   // ---- end-to-end checkReleases with a stubbed network

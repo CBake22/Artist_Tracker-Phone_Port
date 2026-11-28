@@ -167,6 +167,11 @@ const legacySeenIds = rows => rows
   .filter(x => x?.detected && (x.first_seen_at || 0) < Date.now() - Classify.NEW_FLAG_DAYS * 864e5)
   .map(x => x.collection_id);
 
+function sameRow(a, b) {
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)]))
+    if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) return false;
+  return true;
+}
 const DB = {
   artists: () => tx('artists', 'readonly', s => req(s.getAll()))
     .then(a => a.sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }))),
@@ -188,17 +193,22 @@ const DB = {
   // `detected` and first_seen_at are only set on first insert, like the SQL upsert.
   addReleases: (id, list) => tx(['releases', 'artists'], 'readwrite', async (s, a) => {
     const followed = await req(a.getAll());
-    if (!followed.some(x => Number(x.artist_id) === Number(id))) return;  // unfollowed during the check: write nothing
+    if (!followed.some(x => Number(x.artist_id) === Number(id))) return { inserted: 0, changed: 0 };  // unfollowed during the check: write nothing
     // Issue every read at once instead of awaiting them one by one.
     const olds = await Promise.all(list.map(r => req(s.get(r.collection_id))));
+    let inserted = 0, changed = 0;
     list.forEach((r, i) => {
       const old = olds[i];
       const owners = new Set([...ownerIds(old), Number(id),
         ...creditedOwnerIds([r.credited_artist, ...(r.featured_artists || [])].filter(Boolean), followed)].filter(Number.isSafeInteger));
-      s.put({ ...old, ...r, artist_id: old?.artist_id ?? id, artist_ids: [...owners],
+      const merged = { ...old, ...r, artist_id: old?.artist_id ?? id, artist_ids: [...owners],
               detected: old ? old.detected : (r.detected || 0),
-              first_seen_at: old ? old.first_seen_at : Date.now() });
+              first_seen_at: old ? old.first_seen_at : Date.now() };
+      if (old && sameRow(old, merged)) return;   // identical: skip the write (most rows on a routine check)
+      s.put(merged);
+      old ? changed++ : inserted++;
     });
+    return { inserted, changed };
   }),
   exportData: () => tx(['artists', 'releases', 'meta'], 'readonly', async (a, r, m) => ({
     artists: await req(a.getAll()), releases: await req(r.getAll()), meta: await req(m.getAll())
@@ -334,8 +344,9 @@ async function checkArtist(artist, followedNames, limit = FULL_LIMIT) {
     const d = Classify.parseDate(r.release_date);
     if (r.dedupe_key && d !== null) (seen[r.dedupe_key] ||= []).push(d);
   }
-  await DB.addReleases(artist.artist_id, data.releases);
-  return { found, releases: data.releases.length, duration_ms: Date.now() - started };
+  const wrote = (await DB.addReleases(artist.artist_id, data.releases)) || {};
+  return { found, releases: data.releases.length, changed: (wrote.inserted || 0) + (wrote.changed || 0),
+           duration_ms: Date.now() - started };
 }
 let checking = false;
 // Decide who needs a lookup now, and whether it is a routine (newest 30) or full (200) one.
@@ -379,7 +390,7 @@ async function checkReleases(onProgress) {
   if (typeof navigator !== 'undefined' && navigator.onLine === false)
     return { skipped: false, offline: true, succeeded: 0, failed: 0, found: 0, deferred: 0, errors: [] };
   checking = true;
-  const summary = { skipped: false, offline: false, aborted: false, notChecked: 0, succeeded: 0, failed: 0, found: 0, deferred: 0, errors: [] };
+  const summary = { skipped: false, offline: false, aborted: false, notChecked: 0, succeeded: 0, failed: 0, found: 0, changed: 0, deferred: 0, errors: [] };
   try {
     const artists = await DB.artists();
     const followedNames = artists.map(a => a.name);  // loaded once for the whole check
@@ -402,7 +413,7 @@ async function checkReleases(onProgress) {
       const lastFull = prev.full_at ?? (prev.status === 'success' ? prev.checked_at || 0 : 0);
       try {
         const result = await checkArtist(a, followedNames, full ? FULL_LIMIT : ROUTINE_LIMIT);
-        summary.succeeded++; summary.found += result.found; streak = 0;
+        summary.succeeded++; summary.found += result.found; summary.changed += result.changed; streak = 0;
         statuses[a.artist_id] = { status: 'success', checked_at: Date.now(), releases: result.releases,
           new_releases: result.found, duration_ms: result.duration_ms, error: '', full_at: full ? Date.now() : lastFull,
           last_success_at: Date.now() };
@@ -429,7 +440,7 @@ async function checkReleases(onProgress) {
     return summary;
   } finally { checking = false; flushNow = null; }
 }
-// Called on open, when the app returns to the foreground, and when the network comes back. Returns true if it ran.
+// Called on open, when the app returns to the foreground, and when the network comes back. Returns the check summary, or false if it did not run.
 async function autoCheck(onProgress) {
   await ready;
   if (checking || (typeof navigator !== 'undefined' && navigator.onLine === false) || !(await DB.artists()).length) return false;
@@ -437,8 +448,7 @@ async function autoCheck(onProgress) {
   const since = interrupted ? Number(await DB.getMeta('check_started') || 0)
     : Number(await DB.getMeta('last_attempt') || await DB.getMeta('last_check') || 0);
   if (Date.now() - since < (interrupted ? INTERRUPTED_RETRY_MS : CHECK_EVERY_MS)) return false;
-  await checkReleases(onProgress);
-  return true;
+  return await checkReleases(onProgress);  // the summary (always truthy) so callers can tell whether data changed
 }
 
 // ---------- same routes the old FastAPI server exposed ----------

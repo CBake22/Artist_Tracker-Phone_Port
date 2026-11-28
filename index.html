@@ -436,6 +436,11 @@ let unseenOnly = false;
 let artistQuery = '', artistView = 'all', artistsShown = 30;
 const ARTIST_PAGE = 30;
 let artworkByArtist = new Map();
+// Only the visible view is rendered. Changes mark the other views dirty; they render when opened.
+let activeView = 'tracker';
+const dirtyViews = new Set();
+let upcomingShown = 40;
+const COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base' });
 let artistCheckStatuses = {};
 let loaded = false, currentTab = 'tracker', lastTab = 'tracker', openedFromApp = false;
 let profileArtist = null;
@@ -494,19 +499,16 @@ function toggleFavorite(artistId) {
   if (favoriteArtistIds.has(id)) favoriteArtistIds.delete(id);
   else favoriteArtistIds.add(id);
   saveFavoriteIds();
-  releases.sort(byDayThenFavorite);
-  renderFollowing();
-  updateCounts();
-  renderFeed();
-  renderUpcoming();
-  rerenderProfile();
+  settleOrder(releases);
+  renderAll();
 }
 
 function api(path, opts) { return localApi(path, opts); }  // runs in the browser now (store.js)
 function status(text, isErr) { const s = $('#status'); s.textContent = text; s.className = 'status' + (isErr ? ' err' : ''); }
 
+let yearsMemo = null;   // reset whenever `releases` changes (deriveFromReleases)
 function availableYears() {
-  return [...new Set(releases
+  return yearsMemo ||= [...new Set(releases
     .map(r => (r.release_date || '').slice(0, 4))
     .filter(y => /^\d{4}$/.test(y))
     .map(Number))].sort((a, b) => b - a);
@@ -547,26 +549,36 @@ function updatePeriodVisibility() {
   $('#yearSelect').disabled = !availableYears().some(y => Math.floor(y / 10) * 10 === Number(selectedDecade));
 }
 
+// Everything computed from the release list: artist pictures and the period/year pickers.
+function deriveFromReleases() {
+  yearsMemo = null;
+  // Artist picture = cover of their newest released album or EP (no features, no unreleased).
+  // Artists with only singles fall back to their newest own single. One pass, first (newest) wins.
+  const albums = new Map(), singles = new Map(), todayStr = localDateString();
+  for (const r of releases) {
+    if (!r.artwork_url || r.is_feature || r.release_date > todayStr) continue;
+    const target = r.category === 'album' || r.category === 'ep' ? albums : r.category === 'single' ? singles : null;
+    if (!target) continue;
+    for (const ownerId of releaseArtistIds(r)) { const id = Number(ownerId); if (!target.has(id)) target.set(id, r.artwork_url); }
+  }
+  for (const [id, url] of singles) if (!albums.has(id)) albums.set(id, url);
+  artworkByArtist = albums;
+  populatePeriodControls();
+}
+// After a check: re-read the database only if release data actually changed; otherwise redraw from memory.
+async function syncAfterCheck(result) {
+  if (result && (result.found || result.changed)) { await load(); return; }
+  try { artistCheckStatuses = JSON.parse(await DB.getMeta('artist_check_status') || '{}'); } catch {}
+  renderAll(); refreshUpdated();
+}
+
 function load() {
   return Promise.all([api('/artists'), api('/releases'), DB.getMeta('artist_check_status'), favoritesReady])
     .then(([artistData, releaseData, checkStatus]) => {
-      artists = artistData;
+      artists = artistData; artistsChanged();
       try { artistCheckStatuses = JSON.parse(checkStatus || '{}'); } catch { artistCheckStatuses = {}; }
-      releases = releaseData.sort(byDayThenFavorite);  // sorted once here, not on every render
-      artworkByArtist = new Map();
-      // Artist picture = cover of their newest released album or EP (no features, no unreleased).
-      // Artists with only singles fall back to their newest own single.
-      const todayStr = localDateString();
-      const own = releases.filter(r => r.artwork_url && !r.is_feature && !(r.release_date > todayStr));
-      for (const pass of [['album', 'ep'], ['single']])
-        for (const r of own) {
-          if (!pass.includes(r.category)) continue;
-          for (const ownerId of releaseArtistIds(r)) {
-            const id = Number(ownerId);
-            if (!artworkByArtist.has(id)) artworkByArtist.set(id, r.artwork_url);
-          }
-        }
-      populatePeriodControls();
+      releases = settleOrder(releaseData);  // the store already sorts by day; only same-day ties need ordering
+      deriveFromReleases();
       renderAll(); refreshUpdated();
       if (!loaded) { loaded = true; routeFromHash(); }  // open a profile link like #artist/123
     })
@@ -591,14 +603,22 @@ function inArtistScope(r) {
   return artistFilter !== 'favorites' || releaseArtistIds(r).some(id => favoriteArtistIds.has(String(id)));
 }
 const isFavorite = r => releaseArtistIds(r).some(id => favoriteArtistIds.has(String(id)));
-function releaseArtistNames(r) {
-  const byId = new Map(artists.map(a => [Number(a.artist_id), a]));
-  return releaseArtistIds(r).map(id => byId.get(Number(id))).filter(Boolean);
+// Lookups derived from the followed list. Rebuilt only when it changes, not once per row. The credit cache
+// lives inside it, so it is discarded automatically when the followed list changes.
+let followedIndex = null;
+function artistsChanged() { followedIndex = null; }
+function getFollowedIndex() {
+  return followedIndex ||= { known: Classify.knownMap(artists.map(a => a.name)),
+    byName: new Map(artists.map(a => [Classify.norm(a.name), a])), credits: new WeakMap() };
 }
-function splitArtistCredits(raw) {
-  return Classify.splitCredits(raw, artists.map(a => a.name));
-}
+function splitArtistCredits(raw) { return Classify.splitCredits(raw, getFollowedIndex().known); }
 function creditedArtistNames(r) {
+  const cache = getFollowedIndex().credits;
+  let v = cache.get(r);
+  if (!v) { v = computeCreditedArtistNames(r); cache.set(r, v); }
+  return v;
+}
+function computeCreditedArtistNames(r) {
   const primary = splitArtistCredits(r.primary_artist_credit || r.credited_artist || r.artist_name || '');
   // Prefer the corrected structured credits; parse older rows from the title.
   const rawGuests = Array.isArray(r.featured_artists) && r.featured_artists.length
@@ -614,15 +634,26 @@ function creditedArtistNames(r) {
   return { primary: uniquePrimary.length ? uniquePrimary : (guests.length ? [] : [r.artist_name || r.credited_artist || 'Unknown artist']), guests: uniqueGuests };
 }
 
-// Newest day first (undated last); within the same day, favorite artists first.
-function byDayThenFavorite(a, b) {
-  const da = a.release_date || '', db = b.release_date || '';
-  if (da !== db) {
-    if (!da) return 1;
-    if (!db) return -1;
-    return da < db ? 1 : -1;
+// Favorite artists first within each day. The list must already be newest-day-first with undated rows last
+// (the store sorts that way, and removals keep the order), so only runs sharing a day are touched: O(n)
+// instead of re-sorting everything. Stable: other ties keep their existing order.
+function settleOrder(list) {
+  for (let i = 0; i < list.length;) {
+    const day = list[i].release_date || '';
+    let j = i + 1;
+    while (j < list.length && (list[j].release_date || '') === day) j++;
+    if (j - i > 1) {
+      const run = list.slice(i, j), favs = run.filter(isFavorite);
+      if (favs.length && favs.length < run.length) {
+        let k = i;
+        for (const r of favs) list[k++] = r;
+        const favSet = new Set(favs);
+        for (const r of run) if (!favSet.has(r)) list[k++] = r;
+      }
+    }
+    i = j;
   }
-  return isFavorite(b) - isFavorite(a);
+  return list;
 }
 function updateCounts() {
   const n = { album: 0, ep: 0, single: 0, feature: 0, live: 0, compilation: 0 };
@@ -659,7 +690,7 @@ function splitTitle(r) {
 }
 function metaLine(r) {
   const t = typeOf(r), m = el('div', 'meta'), bits = [];
-  const followedByName = new Map(artists.map(a => [Classify.norm(a.name), a]));
+  const followedByName = getFollowedIndex().byName;
   const credited = creditedArtistNames(r);
   const appendNames = (names, separator) => names.forEach((name, i) => {
     if (i) m.append(separator);
@@ -733,6 +764,17 @@ function showCheckProgress(p) {
   btn.textContent = `↻ ${p.done}/${p.total}`;
 }
 
+const trackedArtistCount = () => artistFilter === 'favorites'
+  ? artists.filter(a => favoriteArtistIds.has(String(a.artist_id))).length : artists.length;
+function updateHeader(total) {
+  if (total == null) { const today = localDateString(); total = visible().filter(r => !(r.release_date > today)).length; }
+  const n = trackedArtistCount();
+  $('#count').textContent = `${total.toLocaleString()} releases · ${n} ${artistFilter === 'favorites' ? 'favorite' : 'followed'} artist${n === 1 ? '' : 's'}`;
+}
+const upcomingList = () => { const today = localDateString();
+  return releases.filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r.release_date || '') && r.release_date > today &&
+    (upcomingScope !== 'favorites' || isFavorite(r))); };
+function updateUpcomingBadge() { const n = upcomingList().length, b = $('#upCount'); b.textContent = n || ''; b.hidden = !n; }
 function renderFeed() {
   const feed = $('#feed'); feed.replaceChildren();
   updateFilterBadge();
@@ -749,11 +791,8 @@ function renderFeed() {
   }
   const total = recentWeek.length + list.length;
 
-  const trackedCount = artistFilter === 'favorites'
-    ? artists.filter(a => favoriteArtistIds.has(String(a.artist_id))).length
-    : artists.length;
-  const trackedLabel = artistFilter === 'favorites' ? 'favorite artist' : 'followed artist';
-  $('#count').textContent = `${total.toLocaleString()} releases · ${trackedCount} ${artistFilter === 'favorites' ? 'favorite' : 'followed'} artist${trackedCount === 1 ? '' : 's'}`;
+  const trackedCount = trackedArtistCount();
+  updateHeader(total);
   $('.filter-bar').hidden = !artists.length;
   if (!artists.length) $('#filterPanel').hidden = true;
   if (!total && !artists.length) { feed.append(onboardingCard()); return; }
@@ -841,15 +880,10 @@ function daysUntil(dateStr) {
 
 function renderUpcoming() {
   const feed = $('#upcomingFeed'); feed.replaceChildren();
-  const today = localDateString();
-  const list = releases
-    .filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r.release_date || '') && r.release_date > today &&
-      (upcomingScope !== 'favorites' || isFavorite(r)))
+  const list = upcomingList()
     .sort((a, b) => a.release_date.localeCompare(b.release_date)
       || isFavorite(b) - isFavorite(a)
       || a.name.localeCompare(b.name));
-
-  $('#upCount').textContent = list.length || ''; $('#upCount').hidden = !list.length;
   if (!list.length) {
     feed.append(el('p', 'empty', !artists.length
       ? 'Follow some artists to see their announced releases here.'
@@ -859,7 +893,7 @@ function renderUpcoming() {
     return;
   }
   let month = null;
-  for (const r of list) {
+  for (const r of list.slice(0, upcomingShown)) {
     const m = r.release_date.slice(0, 7);
     if (m !== month) {
       month = m;
@@ -886,6 +920,12 @@ function renderUpcoming() {
     }
     feed.append(row);
   }
+  if (list.length > upcomingShown) {
+    const more = el('button', 'btn', `Show more (${list.length - upcomingShown} left)`);
+    more.type = 'button'; more.style.marginTop = '1rem';
+    more.onclick = () => { upcomingShown += 40; renderUpcoming(); };
+    feed.append(more);
+  }
 }
 
 function artistArtwork(artistId) {
@@ -909,10 +949,10 @@ function renderFollowing() {
   const favoriteCount = artists.filter(isFav).length;
   const q = fold(artistQuery.trim());
   const sorted = artists
-    .filter(a => (artistView !== 'favorites' || isFav(a)) && (!q || fold(a.name).includes(q)))
+    .filter(a => (artistView !== 'favorites' || isFav(a)) && (!q || (a._fold ??= fold(a.name)).includes(q)))
     .sort((a, b) => {
       if (artistSort === 'favorites' && isFav(a) !== isFav(b)) return isFav(a) ? -1 : 1;
-      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      return COLLATOR.compare(a.name, b.name);
     });
 
   const filtering = q || artistView === 'favorites';
@@ -990,7 +1030,20 @@ function renderResults() {
   }
 }
 
-function renderAll() { updateCounts(); updateNew(); renderFeed(); renderUpcoming(); renderFollowing(); renderResults(); rerenderProfile(); }
+// Render scheduling: badges and the header are cheap and always current; each view's DOM is rebuilt only when
+// it is on screen. A change marks every view dirty; a dirty view is rendered the moment it is opened.
+const RENDER = {
+  tracker: () => renderFeed(),
+  upcoming: () => renderUpcoming(),
+  artists: () => { renderFollowing(); renderResults(); },
+  profile: () => rerenderProfile(),
+};
+function flushDirty() { if (dirtyViews.delete(activeView)) RENDER[activeView](); }
+function updateChrome() {
+  updateCounts(); updateNew(); updateUpcomingBadge();
+  if (activeView !== 'tracker') updateHeader();   // the feed updates it itself when it is the visible view
+}
+function renderAll() { updateChrome(); for (const v of Object.keys(RENDER)) dirtyViews.add(v); flushDirty(); }
 
 function selectTab(which) {
   document.body.classList.toggle('profile-open', which === 'profile');
@@ -1001,6 +1054,8 @@ function selectTab(which) {
     if (tab) { tab.classList.toggle('active', on); tab.setAttribute('aria-selected', String(on)); }
   }
   if (which !== 'profile') { currentTab = lastTab = which; document.title = 'Release Tracker'; }
+  activeView = which;
+  flushDirty();
 }
 selectTab('tracker');
 
@@ -1041,6 +1096,7 @@ function externalLink(url, text) {
 
 function showProfile(id) {
   const artist = artists.find(a => Number(a.artist_id) === Number(id));
+  dirtyViews.delete('profile');   // renderProfile below draws the right artist; skip a pointless redraw of the old one
   selectTab('profile');
   window.scrollTo(0, 0);
   if (!artist) {
@@ -1191,7 +1247,7 @@ $('#profileBack').addEventListener('click', () => {
   else { clearArtistHash(); selectTab(lastTab); }
 });
 window.addEventListener('hashchange', () => { if (loaded) routeFromHash(); });
-$('#upcomingScope').addEventListener('change', e => { upcomingScope = e.target.value; saveFilters(); renderUpcoming(); });
+$('#upcomingScope').addEventListener('change', e => { upcomingScope = e.target.value; upcomingShown = 40; saveFilters(); updateUpcomingBadge(); renderUpcoming(); });
 $('#seenFilter').addEventListener('change', e => { unseenOnly = e.target.value === 'unseen'; shown = 40; renderFeed(); });
 $('#markSeenBtn').addEventListener('click', () => markSeen(unseenReleases().flatMap(r => r.group_ids || [r.collection_id])));
 $('#filterBtn').addEventListener('click', () => { const p = $('#filterPanel'); p.hidden = !p.hidden; $('#filterBtn').setAttribute('aria-expanded', String(!p.hidden)); });
@@ -1267,9 +1323,9 @@ $('#checkBtn').addEventListener('click', async e => {
   try { const result = await api('/check-now', { method: 'POST', onProgress: showCheckProgress });
     if (result.skipped) status('A release check is already in progress.');
     else if (result.offline) status('You appear to be offline. Try again once you are connected.', true);
-    else if (result.aborted) { await load();
+    else if (result.aborted) { await syncAfterCheck(result);
       status(`Check stopped after repeated network errors: ${result.succeeded} artists updated, ${result.notChecked} not checked. Try again shortly.`, true); }
-    else { await load();
+    else { await syncAfterCheck(result);
     const skippedNote = result.deferred ? ` ${result.deferred} checked recently, skipped.` : '';
     status((result.failed ? `Check finished with ${result.failed} error${result.failed === 1 ? '' : 's'}; ${result.succeeded} artists updated.` : `Check finished. ${result.succeeded} artists checked; ${result.found} new releases found.`) + skippedNote, result.failed > 0); } }
   catch (err) { status('Check failed: ' + err.message, true); }
@@ -1306,27 +1362,39 @@ function showToast(msg, onUndo) {
   const t = $('#toast'), b = el('button', 'btn quiet', 'Undo'); b.type = 'button'; b.onclick = onUndo;
   t.replaceChildren(el('span', null, msg), b); t.hidden = false;
 }
+// What DB.removeArtist does to one stored release, applied to the in-memory row (null = row is deleted).
+function withoutOwner(r, id) {
+  const owners = releaseArtistIds(r).map(Number).filter(x => Number.isSafeInteger(x) && x > 0 && x !== Number(id));
+  if (!owners.length) return null;
+  const names = new Map(artists.map(a => [Number(a.artist_id), a.name]));
+  const ownerNames = owners.map(x => names.get(x)).filter(Boolean);
+  return { ...r, artist_ids: owners, artist_id: owners[0], artist_names: ownerNames, artist_name: names.get(owners[0]) || ownerNames[0] || '' };
+}
 async function commitRemoval() {
   if (!pending) return;
   const p = pending; pending = null; clearTimeout(p.timer); hideToast();
   try {
     await api('/artists/' + p.id, { method: 'DELETE' });
     favoriteArtistIds.delete(String(p.id)); saveFavoriteIds();
-  } catch (e) { status('Could not remove artist: ' + e.message, true); }
-  await load();
+    // The screen already shows the removal, so no database reload: just re-apply the favorites ordering.
+    settleOrder(releases); renderAll();
+  } catch (e) { status('Could not remove artist: ' + e.message, true); await load(); }
 }
 async function removeArtistWithUndo(a) {
   await commitRemoval();  // finalise any earlier removal first
   const keepArtists = artists, keepReleases = releases;
-  artists = artists.filter(x => x.artist_id !== a.artist_id);
-  releases = releases.filter(r => !releaseArtistIds(r).some(id => Number(id) === Number(a.artist_id)) || releaseArtistIds(r).length > 1)
-    .map(r => releaseArtistIds(r).some(id => Number(id) === Number(a.artist_id))
-      ? { ...r, artist_ids: releaseArtistIds(r).filter(id => Number(id) !== Number(a.artist_id)) } : r);
+  artists = artists.filter(x => x.artist_id !== a.artist_id); artistsChanged();
+  releases = releases.flatMap(r => {
+    if (!releaseArtistIds(r).some(id => Number(id) === Number(a.artist_id))) return [r];
+    const next = withoutOwner(r, a.artist_id);
+    return next ? [next] : [];
+  });
+  deriveFromReleases();
   renderAll();
   const p = pending = { id: a.artist_id, timer: setTimeout(commitRemoval, 6000) };
   showToast(`Removed ${a.name}`, () => {
     if (pending !== p) return;
-    clearTimeout(p.timer); pending = null; artists = keepArtists; releases = keepReleases; hideToast(); renderAll();
+    clearTimeout(p.timer); pending = null; artists = keepArtists; artistsChanged(); releases = keepReleases; deriveFromReleases(); hideToast(); renderAll();
   });
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) commitRemoval(); });
@@ -1371,7 +1439,7 @@ $('#importFile').addEventListener('change', async e => {
   } catch (err) { status('Import failed: ' + err.message, true); }
 });
 const runAutoCheck = () => autoCheck(showCheckProgress)
-  .then(ran => { if (ran) { showCheckProgress(null); return load(); } })
+  .then(ran => { if (ran) { showCheckProgress(null); return syncAfterCheck(ran); } })
   .catch(() => showCheckProgress(null));
 load().then(runAutoCheck);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) runAutoCheck(); });
